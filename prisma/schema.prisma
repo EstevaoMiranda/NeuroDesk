@@ -1,0 +1,147 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum Plan {
+  ESSENCIAL
+  CLINICA
+  REDE
+}
+
+enum UserRole {
+  ADMIN
+  MANAGER
+  THERAPIST
+  RECEPTIONIST
+}
+
+enum Specialty {
+  FONOAUDIOLOGIA
+  TERAPIA_OCUPACIONAL
+  PSICOLOGIA
+  ABA
+  PSICOMOTRICIDADE
+}
+
+enum ContactType {
+  NEW_CONTACT
+  PARENT_CLIENT
+  PROFESSIONAL
+}
+
+enum ContactStatus {
+  ACTIVE
+  INACTIVE
+  PENDING
+}
+
+enum SessionStatus {
+  SCHEDULED
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+enum Direction {
+  INBOUND
+  OUTBOUND
+}
+
+enum Channel {
+  WHATSAPP
+  INSTAGRAM
+  MANUAL
+}
+
+model Clinic {
+  id                String    @id @default(cuid())
+  name              String
+  slug              String    @unique
+  plan              Plan      @default(ESSENCIAL)
+  whatsappInstance  String?
+  whatsappToken     String?
+  createdAt         DateTime  @default(now())
+  users             User[]
+  contacts          Contact[]
+  messages          Message[]
+  sessions          Session[]
+}
+
+model User {
+  id               String     @id @default(cuid())
+  name             String
+  email            String     @unique
+  passwordHash     String
+  role             UserRole
+  specialty        Specialty?
+  clinicId         String
+  clinic           Clinic     @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  sessions         Session[]
+  assignedContacts Contact[]
+  createdAt        DateTime   @default(now())
+
+  @@index([clinicId])
+}
+
+model Contact {
+  id           String        @id @default(cuid())
+  name         String
+  phone        String
+  email        String?
+  type         ContactType   @default(NEW_CONTACT)
+  status       ContactStatus @default(PENDING)
+  clinicId     String
+  clinic       Clinic        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  assignedToId String?
+  assignedTo   User?         @relation(fields: [assignedToId], references: [id])
+  notes        String?
+  messages     Message[]
+  sessions     Session[]
+  createdAt    DateTime      @default(now())
+
+  @@index([clinicId])
+  @@index([assignedToId])
+}
+
+model Message {
+  id        String    @id @default(cuid())
+  contactId String
+  contact   Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  clinicId  String
+  clinic    Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  direction Direction
+  channel   Channel   @default(WHATSAPP)
+  content   String
+  read      Boolean   @default(false)
+  createdAt DateTime  @default(now())
+
+  @@index([clinicId])
+  @@index([contactId])
+}
+
+model Session {
+  id          String        @id @default(cuid())
+  contactId   String
+  contact     Contact       @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  clinicId    String
+  clinic      Clinic        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  therapistId String
+  therapist   User          @relation(fields: [therapistId], references: [id])
+  specialty   Specialty
+  status      SessionStatus @default(SCHEDULED)
+  scheduledAt DateTime
+  duration    Int           @default(50)
+  notes       String?
+  createdAt   DateTime      @default(now())
+
+  @@index([clinicId])
+  @@index([therapistId])
+  @@index([contactId])
+}
