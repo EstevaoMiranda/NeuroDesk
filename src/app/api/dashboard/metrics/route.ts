@@ -10,48 +10,52 @@ export async function GET(req: Request) {
     const payload = await verifyToken(token)
     const { clinicId } = payload
 
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
-    const todayEnd = new Date()
-    todayEnd.setHours(23, 59, 59, 999)
-
     const sevenDaysAgo = new Date()
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
 
     const [
+      novosContatos,
+      visitasAgendadas,
       totalContatos,
-      sessoesHoje,
-      mensagensNaoLidas,
-      totalMensagens,
-      mensagensRespondidas,
+      clientesCount,
+      leadsFriosAll,
       recentMessages,
       recentSessions,
     ] = await Promise.all([
+      // Total NEW label
+      prisma.contact.count({ where: { clinicId, label: 'NEW' } }),
+
+      // Total VISITA label
+      prisma.contact.count({ where: { clinicId, label: 'VISITA' } }),
+
+      // Total contacts for conversion rate
       prisma.contact.count({ where: { clinicId } }),
-      prisma.session.count({
-        where: {
-          clinicId,
-          scheduledAt: { gte: today, lte: todayEnd },
-          status: { in: ['SCHEDULED', 'CONFIRMED'] },
+
+      // Total CLIENTE label
+      prisma.contact.count({ where: { clinicId, label: 'CLIENTE' } }),
+
+      // Leads Frios contacts (to find the ones > 7 days without response)
+      prisma.contact.findMany({
+        where: { clinicId, label: 'LEAD_FRIO' },
+        include: {
+          messages: {
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+          },
         },
       }),
-      prisma.message.count({
-        where: { clinicId, read: false, direction: 'INBOUND' },
-      }),
-      prisma.message.count({
-        where: { clinicId, createdAt: { gte: sevenDaysAgo }, direction: 'INBOUND' },
-      }),
-      prisma.message.count({
-        where: { clinicId, createdAt: { gte: sevenDaysAgo }, direction: 'OUTBOUND' },
-      }),
+
+      // Recent messages for activity feed
       prisma.message.findMany({
         where: { clinicId, createdAt: { gte: sevenDaysAgo } },
         include: {
-          contact: { select: { id: true, name: true } },
+          contact: { select: { id: true, name: true, label: true } },
         },
         orderBy: { createdAt: 'desc' },
-        take: 10,
+        take: 8,
       }),
+
+      // Recent sessions for activity feed
       prisma.session.findMany({
         where: { clinicId, scheduledAt: { gte: sevenDaysAgo } },
         include: {
@@ -63,11 +67,20 @@ export async function GET(req: Request) {
       }),
     ])
 
-    const taxaResposta = totalMensagens > 0
-      ? Math.min(100, Math.round((mensagensRespondidas / totalMensagens) * 100))
+    // Leads Frios with last message > 7 days ago
+    const leadsFriosAlerta = leadsFriosAll.filter((c) => {
+      const lastMsg = c.messages[0]
+      if (!lastMsg) return true // no messages = cold
+      const diffDays = Math.floor(
+        (Date.now() - new Date(lastMsg.createdAt).getTime()) / (1000 * 60 * 60 * 24)
+      )
+      return diffDays > 7
+    }).length
+
+    const taxaConversao = totalContatos > 0
+      ? Math.round((clientesCount / totalContatos) * 100)
       : 0
 
-    // Combine and sort recent activities
     const atividadesRecentes = [
       ...recentMessages.map((m) => ({
         id: m.id,
@@ -87,14 +100,15 @@ export async function GET(req: Request) {
         timestamp: s.scheduledAt,
         status: s.status,
       })),
-    ].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+    ]
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
       .slice(0, 10)
 
     return NextResponse.json({
-      totalContatos,
-      sessoesHoje,
-      mensagensNaoLidas,
-      taxaResposta,
+      novosContatos,
+      visitasAgendadas,
+      leadsFriosAlerta,
+      taxaConversao,
       atividadesRecentes,
     })
   } catch (error) {

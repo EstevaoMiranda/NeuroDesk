@@ -35,10 +35,13 @@ enum ContactType {
   PROFESSIONAL
 }
 
-enum ContactStatus {
-  ACTIVE
-  INACTIVE
-  PENDING
+enum ContactLabel {
+  NEW
+  VISITA
+  LEAD_FRIO
+  CLIENTE
+  PROFISSIONAL
+  CURRICULO
 }
 
 enum SessionStatus {
@@ -96,7 +99,7 @@ model Contact {
   phone        String
   email        String?
   type         ContactType   @default(NEW_CONTACT)
-  status       ContactStatus @default(PENDING)
+  label        ContactLabel  @default(NEW)
   clinicId     String
   clinic       Clinic        @relation(fields: [clinicId], references: [id], onDelete: Cascade)
   assignedToId String?

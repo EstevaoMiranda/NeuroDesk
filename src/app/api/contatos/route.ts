@@ -8,7 +8,7 @@ const createContactSchema = z.object({
   phone: z.string().min(8, 'Telefone inválido'),
   email: z.string().email().optional().or(z.literal('')),
   type: z.enum(['NEW_CONTACT', 'PARENT_CLIENT', 'PROFESSIONAL']).default('NEW_CONTACT'),
-  status: z.enum(['ACTIVE', 'INACTIVE', 'PENDING']).default('PENDING'),
+  label: z.enum(['NEW', 'VISITA', 'LEAD_FRIO', 'CLIENTE', 'PROFISSIONAL', 'CURRICULO']).default('NEW'),
   assignedToId: z.string().optional(),
   notes: z.string().optional(),
 })
@@ -23,8 +23,8 @@ export async function GET(req: Request) {
 
     const { searchParams } = new URL(req.url)
     const search = searchParams.get('search') || ''
+    const label = searchParams.get('label') || ''
     const type = searchParams.get('type') || ''
-    const status = searchParams.get('status') || ''
 
     const where: Record<string, unknown> = { clinicId }
 
@@ -36,8 +36,8 @@ export async function GET(req: Request) {
       ]
     }
 
+    if (label) where.label = label
     if (type) where.type = type
-    if (status) where.status = status
 
     const contacts = await prisma.contact.findMany({
       where,
@@ -92,7 +92,7 @@ export async function POST(req: Request) {
         phone: data.phone,
         email: data.email || null,
         type: data.type,
-        status: data.status,
+        label: data.label,
         notes: data.notes || null,
         assignedToId: data.assignedToId || null,
         clinicId,

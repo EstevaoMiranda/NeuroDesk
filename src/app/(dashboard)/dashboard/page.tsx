@@ -24,7 +24,6 @@ export default function DashboardPage() {
         setLoading(false)
       }
     }
-
     loadMetrics()
   }, [])
 
@@ -39,48 +38,45 @@ export default function DashboardPage() {
             color="purple"
             icon={
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
               </svg>
             }
-            title="Total de Contatos"
-            value={loading ? '...' : (metrics?.totalContatos ?? 0)}
-            subtitle="Pacientes e famílias"
-            change={12}
-          />
-          <MetricCard
-            color="green"
-            icon={
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-              </svg>
-            }
-            title="Sessões Hoje"
-            value={loading ? '...' : (metrics?.sessoesHoje ?? 0)}
-            subtitle="Agendadas para hoje"
-          />
-          <MetricCard
-            color="blue"
-            icon={
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 3H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z" />
-              </svg>
-            }
-            title="Mensagens Não Lidas"
-            value={loading ? '...' : (metrics?.mensagensNaoLidas ?? 0)}
-            subtitle="Aguardando resposta"
-            change={-3}
+            title="Novos Contatos"
+            value={loading ? '...' : (metrics?.novosContatos ?? 0)}
+            subtitle="Aguardando atendimento"
           />
           <MetricCard
             color="amber"
             icon={
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+            }
+            title="Visitas Agendadas"
+            value={loading ? '...' : (metrics?.visitasAgendadas ?? 0)}
+            subtitle="Aguardando visita"
+          />
+          <MetricCard
+            color="red"
+            icon={
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            }
+            title="Leads Frios (Alerta)"
+            value={loading ? '...' : (metrics?.leadsFriosAlerta ?? 0)}
+            subtitle="Sem resposta há +7 dias"
+          />
+          <MetricCard
+            color="green"
+            icon={
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
               </svg>
             }
-            title="Taxa de Resposta"
-            value={loading ? '...' : `${metrics?.taxaResposta ?? 0}%`}
-            subtitle="Últimos 7 dias"
-            change={5}
+            title="Taxa de Conversão"
+            value={loading ? '...' : `${metrics?.taxaConversao ?? 0}%`}
+            subtitle="Leads → Clientes"
           />
         </div>
 
@@ -89,7 +85,7 @@ export default function DashboardPage() {
           <div className="xl:col-span-2 card">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-lg font-bold text-slate-900">Atividade Recente</h2>
-              <span className="text-sm text-slate-400">Últimas 24 horas</span>
+              <span className="text-sm text-slate-400">Últimos 7 dias</span>
             </div>
 
             {loading ? (
@@ -142,38 +138,44 @@ export default function DashboardPage() {
             )}
           </div>
 
-          {/* Quick Stats Sidebar */}
+          {/* Funil de labels */}
           <div className="space-y-4">
             <div className="card">
-              <h3 className="text-base font-bold text-slate-900 mb-4">Sessões por Especialidade</h3>
+              <h3 className="text-base font-bold text-slate-900 mb-4">Funil de Atendimento</h3>
               <div className="space-y-3">
                 {[
-                  { specialty: 'FONOAUDIOLOGIA' as const, count: 3 },
-                  { specialty: 'TERAPIA_OCUPACIONAL' as const, count: 4 },
-                  { specialty: 'PSICOLOGIA' as const, count: 2 },
-                ].map(({ specialty, count }) => (
-                  <div key={specialty} className="flex items-center justify-between">
-                    <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${getSpecialtyColor(specialty)}`}>
-                      {getSpecialtyLabel(specialty)}
-                    </span>
-                    <span className="text-sm font-bold text-slate-700">{count}</span>
+                  { emoji: '🆕', label: 'Novos',             color: 'bg-gray-200',    key: 'novosContatos' as const },
+                  { emoji: '🟡', label: 'Visitas Marcadas',   color: 'bg-amber-200',   key: 'visitasAgendadas' as const },
+                  { emoji: '🟢', label: 'Clientes',           color: 'bg-emerald-200', key: null },
+                ].map(({ emoji, label, color, key }) => (
+                  <div key={label} className="flex items-center gap-3">
+                    <div className={`w-2 h-8 rounded-full ${color}`} />
+                    <div className="flex-1 flex items-center justify-between">
+                      <span className="text-sm text-slate-600">{emoji} {label}</span>
+                      <span className="text-sm font-bold text-slate-800">
+                        {loading ? '…' : key ? (metrics?.[key] ?? 0) : '—'}
+                      </span>
+                    </div>
                   </div>
                 ))}
               </div>
             </div>
 
             <div className="card">
-              <h3 className="text-base font-bold text-slate-900 mb-4">Resumo da Semana</h3>
+              <h3 className="text-base font-bold text-slate-900 mb-4">Sessões por Especialidade</h3>
               <div className="space-y-3">
-                {[
-                  { label: 'Sessões agendadas', value: 7, color: 'text-blue-600' },
-                  { label: 'Sessões confirmadas', value: 2, color: 'text-green-600' },
-                  { label: 'Sessões concluídas', value: 2, color: 'text-slate-600' },
-                  { label: 'Faltas', value: 0, color: 'text-red-500' },
-                ].map(({ label, value, color }) => (
-                  <div key={label} className="flex items-center justify-between py-1">
-                    <span className="text-sm text-slate-500">{label}</span>
-                    <span className={`text-sm font-bold ${color}`}>{value}</span>
+                {(
+                  [
+                    { specialty: 'FONOAUDIOLOGIA' as const, count: 3 },
+                    { specialty: 'TERAPIA_OCUPACIONAL' as const, count: 4 },
+                    { specialty: 'PSICOLOGIA' as const, count: 2 },
+                  ] as const
+                ).map(({ specialty, count }) => (
+                  <div key={specialty} className="flex items-center justify-between">
+                    <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${getSpecialtyColor(specialty)}`}>
+                      {getSpecialtyLabel(specialty)}
+                    </span>
+                    <span className="text-sm font-bold text-slate-700">{count}</span>
                   </div>
                 ))}
               </div>

@@ -1,9 +1,17 @@
 'use client'
 
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import Topbar from '@/components/layout/Topbar'
-import type { Contact, Message } from '@/types'
-import { getInitials, timeAgo, formatDateTime } from '@/lib/utils'
+import type { Contact, Message, ContactLabel } from '@/types'
+import {
+  getInitials,
+  timeAgo,
+  formatDateTime,
+  getLabelText,
+  getLabelBgColor,
+  getLabelHex,
+  daysSince,
+} from '@/lib/utils'
 
 interface ConversationItem {
   contact: Contact
@@ -12,20 +20,77 @@ interface ConversationItem {
   lastMessage: Message | null
 }
 
+type TabLabel = 'ALL' | ContactLabel
+
+const TABS: { id: TabLabel; emoji: string; label: string }[] = [
+  { id: 'ALL',        emoji: '💬', label: 'Todos' },
+  { id: 'NEW',        emoji: '🆕', label: 'Novos' },
+  { id: 'VISITA',     emoji: '🟡', label: 'Visitas Marcadas' },
+  { id: 'LEAD_FRIO',  emoji: '🔵', label: 'Leads Frios' },
+  { id: 'CLIENTE',    emoji: '🟢', label: 'Clientes' },
+  { id: 'PROFISSIONAL', emoji: '👤', label: 'Profissionais' },
+  { id: 'CURRICULO',  emoji: '📄', label: 'Currículos' },
+]
+
+const QUICK_REPLIES: Record<ContactLabel | 'ALL', string[]> = {
+  ALL: ['Olá! Como posso ajudar?', 'Aguarde um momento.'],
+  NEW: [
+    'Olá! Seja bem-vindo à Terap Moviment 👋',
+    'Como posso te ajudar?',
+    'Poderia me contar mais sobre sua necessidade?',
+  ],
+  VISITA: [
+    'Confirmando sua visita 😊 Você virá no horário combinado?',
+    'Precisamos reagendar sua visita?',
+    'Lembrando que sua visita está agendada para amanhã!',
+  ],
+  LEAD_FRIO: [
+    'Olá! Tudo bem? Ainda tem interesse em conhecer a clínica?',
+    'Oi! Passando para retomar contato. Posso ajudar com algo?',
+    'Temos novidades que podem te interessar! Posso apresentar?',
+  ],
+  CLIENTE: [
+    'Olá! Como posso ajudar?',
+    'Vou verificar com a equipe e retorno em breve!',
+    'Tudo certo! Pode deixar que resolvo.',
+  ],
+  PROFISSIONAL: [
+    'Olá! Como posso ajudar?',
+    'Vou verificar com nossa equipe.',
+    'Pode encaminhar os dados do paciente.',
+  ],
+  CURRICULO: [
+    'Olá! Recebemos seu currículo com interesse.',
+    'Nossa equipe irá analisar e entraremos em contato.',
+    'Obrigado pelo interesse em fazer parte da nossa equipe!',
+  ],
+}
+
+const ACTION_BUTTONS: Record<ContactLabel, { label: string; targetLabel: ContactLabel; color: string }[]> = {
+  NEW: [
+    { label: 'Marcar como Lead Frio', targetLabel: 'LEAD_FRIO', color: 'bg-blue-100 text-blue-700 hover:bg-blue-200' },
+    { label: 'Agendar Visita',        targetLabel: 'VISITA',    color: 'bg-amber-100 text-amber-700 hover:bg-amber-200' },
+  ],
+  LEAD_FRIO: [
+    { label: 'Agendar Visita',        targetLabel: 'VISITA',    color: 'bg-amber-100 text-amber-700 hover:bg-amber-200' },
+  ],
+  VISITA: [
+    { label: 'Converteu para Cliente', targetLabel: 'CLIENTE',  color: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' },
+  ],
+  CLIENTE: [],
+  PROFISSIONAL: [],
+  CURRICULO: [],
+}
+
 export default function InboxPage() {
   const [conversations, setConversations] = useState<ConversationItem[]>([])
   const [selectedConversation, setSelectedConversation] = useState<ConversationItem | null>(null)
+  const [activeTab, setActiveTab] = useState<TabLabel>('ALL')
   const [loading, setLoading] = useState(true)
   const [sendingMessage, setSendingMessage] = useState(false)
   const [newMessage, setNewMessage] = useState('')
+  const [updatingLabel, setUpdatingLabel] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
-
-  const quickReplies = [
-    'Olá! Como posso ajudar?',
-    'Aguarde um momento, vou verificar.',
-    'Posso te ajudar a agendar uma consulta.',
-    'Para mais informações, entre em contato pelo telefone.',
-  ]
 
   async function loadConversations() {
     try {
@@ -43,14 +108,14 @@ export default function InboxPage() {
 
   async function selectConversation(conv: ConversationItem) {
     setSelectedConversation(conv)
-    // Mark as read
     if (conv.unreadCount > 0) {
-      const updated = conversations.map((c) =>
-        c.contact.id === conv.contact.id
-          ? { ...c, unreadCount: 0, messages: c.messages.map((m) => ({ ...m, read: true })) }
-          : c
+      setConversations((prev) =>
+        prev.map((c) =>
+          c.contact.id === conv.contact.id
+            ? { ...c, unreadCount: 0, messages: c.messages.map((m) => ({ ...m, read: true })) }
+            : c
+        )
       )
-      setConversations(updated)
       setSelectedConversation({ ...conv, unreadCount: 0 })
     }
   }
@@ -80,7 +145,6 @@ export default function InboxPage() {
           if (!prev) return prev
           return { ...prev, messages: [...prev.messages, newMsg], lastMessage: newMsg }
         })
-
         setConversations((prev) =>
           prev.map((c) =>
             c.contact.id === selectedConversation.contact.id
@@ -96,44 +160,110 @@ export default function InboxPage() {
     }
   }
 
-  useEffect(() => {
-    loadConversations()
-  }, [])
+  async function handleUpdateLabel(contactId: string, newLabel: ContactLabel) {
+    setUpdatingLabel(true)
+    try {
+      const res = await fetch(`/api/contatos/${contactId}/label`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label: newLabel }),
+      })
+
+      if (res.ok) {
+        // Update local state
+        const updatedContact = { ...selectedConversation!.contact, label: newLabel }
+        const updatedConv = { ...selectedConversation!, contact: updatedContact }
+        setSelectedConversation(updatedConv)
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.contact.id === contactId
+              ? { ...c, contact: { ...c.contact, label: newLabel } }
+              : c
+          )
+        )
+      }
+    } catch (error) {
+      console.error('Erro ao atualizar etiqueta:', error)
+    } finally {
+      setUpdatingLabel(false)
+    }
+  }
+
+  useEffect(() => { loadConversations() }, [])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [selectedConversation?.messages])
 
-  const totalUnread = conversations.reduce((sum, c) => sum + c.unreadCount, 0)
+  const filteredConversations = conversations.filter((conv) =>
+    activeTab === 'ALL' ? true : conv.contact.label === activeTab
+  )
+
+  const tabCounts = useCallback(
+    (tab: TabLabel) => {
+      if (tab === 'ALL') return conversations.reduce((s, c) => s + c.unreadCount, 0)
+      return conversations
+        .filter((c) => c.contact.label === tab)
+        .reduce((s, c) => s + c.unreadCount, 0)
+    },
+    [conversations]
+  )
+
+  const tabTotals = useCallback(
+    (tab: TabLabel) => {
+      if (tab === 'ALL') return conversations.length
+      return conversations.filter((c) => c.contact.label === tab).length
+    },
+    [conversations]
+  )
+
+  const currentLabel = selectedConversation?.contact.label ?? 'NEW'
+  const quickReplies = QUICK_REPLIES[currentLabel] || QUICK_REPLIES.ALL
+  const actionButtons = ACTION_BUTTONS[currentLabel] || []
 
   return (
     <div className="flex flex-col h-screen">
       <Topbar title="Inbox" />
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Conversations List */}
+        {/* ── LEFT PANEL ────────────────────────────────── */}
         <div className="w-80 flex-shrink-0 border-r border-slate-200 bg-white flex flex-col">
-          <div className="p-4 border-b border-slate-100">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="font-bold text-slate-900">Conversas</h2>
-              {totalUnread > 0 && (
-                <span className="bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
-                  {totalUnread}
-                </span>
-              )}
-            </div>
-            <div className="relative">
-              <svg className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
-              <input
-                type="text"
-                placeholder="Buscar conversa..."
-                className="w-full pl-9 pr-4 py-2 bg-slate-100 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:bg-white transition-all"
-              />
+
+          {/* Tab bar */}
+          <div className="border-b border-slate-100 overflow-x-auto">
+            <div className="flex min-w-max">
+              {TABS.map((tab) => {
+                const unread = tabCounts(tab.id)
+                const isActive = activeTab === tab.id
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id)}
+                    className={`flex items-center gap-1.5 px-3 py-3 text-xs font-medium whitespace-nowrap border-b-2 transition-colors ${
+                      isActive
+                        ? 'border-primary-500 text-primary-600'
+                        : 'border-transparent text-slate-500 hover:text-slate-700'
+                    }`}
+                  >
+                    <span>{tab.emoji}</span>
+                    <span>{tab.label}</span>
+                    {unread > 0 && (
+                      <span className="bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none">
+                        {unread}
+                      </span>
+                    )}
+                    {unread === 0 && tabTotals(tab.id) > 0 && (
+                      <span className="bg-slate-100 text-slate-500 text-[10px] px-1.5 py-0.5 rounded-full leading-none">
+                        {tabTotals(tab.id)}
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
             </div>
           </div>
 
+          {/* Conversation list */}
           <div className="flex-1 overflow-y-auto">
             {loading ? (
               <div className="p-4 space-y-3">
@@ -147,86 +277,138 @@ export default function InboxPage() {
                   </div>
                 ))}
               </div>
-            ) : conversations.length === 0 ? (
+            ) : filteredConversations.length === 0 ? (
               <div className="p-8 text-center text-slate-400">
-                <svg className="w-12 h-12 mx-auto mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-12 h-12 mx-auto mb-3 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 3H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z" />
                 </svg>
-                <p className="text-sm">Nenhuma conversa ainda</p>
+                <p className="text-sm">Nenhuma conversa nesta aba</p>
               </div>
             ) : (
-              conversations.map((conv) => (
-                <button
-                  key={conv.contact.id}
-                  onClick={() => selectConversation(conv)}
-                  className={`w-full p-4 flex items-start gap-3 transition-colors text-left border-b border-slate-50 ${
-                    selectedConversation?.contact.id === conv.contact.id
-                      ? 'bg-primary-50 border-l-2 border-l-primary-500'
-                      : 'hover:bg-slate-50'
-                  }`}
-                >
-                  <div className="relative flex-shrink-0">
-                    <div className="w-10 h-10 bg-primary-100 rounded-xl flex items-center justify-center">
-                      <span className="text-primary-600 text-sm font-bold">{getInitials(conv.contact.name)}</span>
+              filteredConversations.map((conv) => {
+                const isSelected = selectedConversation?.contact.id === conv.contact.id
+                const days = conv.lastMessage ? daysSince(conv.lastMessage.createdAt) : null
+                const isLeadFrioAtrasado = conv.contact.label === 'LEAD_FRIO' && days !== null && days > 7
+
+                return (
+                  <button
+                    key={conv.contact.id}
+                    onClick={() => selectConversation(conv)}
+                    className={`w-full px-4 py-3 flex items-start gap-3 text-left border-b border-slate-50 transition-colors ${
+                      isSelected
+                        ? 'bg-primary-50 border-l-2 border-l-primary-500'
+                        : 'hover:bg-slate-50'
+                    }`}
+                  >
+                    {/* Avatar */}
+                    <div className="relative flex-shrink-0">
+                      <div
+                        className="w-10 h-10 rounded-xl flex items-center justify-center text-white text-sm font-bold"
+                        style={{ backgroundColor: getLabelHex(conv.contact.label) }}
+                      >
+                        {getInitials(conv.contact.name)}
+                      </div>
+                      {conv.unreadCount > 0 && (
+                        <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold w-4 h-4 rounded-full flex items-center justify-center">
+                          {conv.unreadCount > 9 ? '9+' : conv.unreadCount}
+                        </span>
+                      )}
                     </div>
-                    {conv.unreadCount > 0 && (
-                      <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold w-5 h-5 rounded-full flex items-center justify-center">
-                        {conv.unreadCount > 9 ? '9+' : conv.unreadCount}
+
+                    {/* Info */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-1">
+                        <p className={`text-sm truncate ${conv.unreadCount > 0 ? 'font-bold text-slate-900' : 'font-medium text-slate-700'}`}>
+                          {conv.contact.name}
+                        </p>
+                        <p className="text-[11px] text-slate-400 flex-shrink-0">
+                          {conv.lastMessage ? timeAgo(conv.lastMessage.createdAt) : ''}
+                        </p>
+                      </div>
+
+                      {/* Label badge */}
+                      <span className={`inline-block text-[10px] font-medium px-1.5 py-0.5 rounded-full mt-0.5 ${getLabelBgColor(conv.contact.label)}`}>
+                        {getLabelText(conv.contact.label)}
                       </span>
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between">
-                      <p className={`text-sm truncate ${conv.unreadCount > 0 ? 'font-bold text-slate-900' : 'font-medium text-slate-700'}`}>
-                        {conv.contact.name}
-                      </p>
-                      <p className="text-xs text-slate-400 flex-shrink-0 ml-2">
-                        {conv.lastMessage ? timeAgo(conv.lastMessage.createdAt) : ''}
-                      </p>
+
+                      {/* Last message preview */}
+                      {conv.lastMessage && (
+                        <p className={`text-xs truncate mt-0.5 ${conv.unreadCount > 0 ? 'text-slate-700 font-medium' : 'text-slate-400'}`}>
+                          {conv.lastMessage.direction === 'OUTBOUND' ? 'Você: ' : ''}
+                          {conv.lastMessage.content}
+                        </p>
+                      )}
+
+                      {/* Alert indicators */}
+                      {isLeadFrioAtrasado && (
+                        <p className="text-[11px] text-red-500 font-medium mt-0.5">
+                          ⚠ Sem resposta há {days} dias
+                        </p>
+                      )}
                     </div>
-                    {conv.lastMessage && (
-                      <p className={`text-xs truncate mt-0.5 ${conv.unreadCount > 0 ? 'text-slate-700 font-medium' : 'text-slate-400'}`}>
-                        {conv.lastMessage.direction === 'OUTBOUND' ? 'Você: ' : ''}
-                        {conv.lastMessage.content}
-                      </p>
-                    )}
-                  </div>
-                </button>
-              ))
+                  </button>
+                )
+              })
             )}
           </div>
         </div>
 
-        {/* Chat View */}
-        <div className="flex-1 flex flex-col bg-slate-50">
+        {/* ── RIGHT PANEL / CHAT ────────────────────────── */}
+        <div className="flex-1 flex flex-col bg-slate-50 min-w-0">
           {selectedConversation ? (
             <>
-              {/* Contact Header */}
-              <div className="bg-white border-b border-slate-200 p-4 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-primary-100 rounded-xl flex items-center justify-center">
-                    <span className="text-primary-600 font-bold">{getInitials(selectedConversation.contact.name)}</span>
+              {/* Chat header */}
+              <div className="bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div
+                    className="w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold flex-shrink-0"
+                    style={{ backgroundColor: getLabelHex(selectedConversation.contact.label) }}
+                  >
+                    {getInitials(selectedConversation.contact.name)}
                   </div>
-                  <div>
-                    <p className="font-bold text-slate-900">{selectedConversation.contact.name}</p>
-                    <p className="text-xs text-slate-500">{selectedConversation.contact.phone}</p>
+                  <div className="min-w-0">
+                    <p className="font-bold text-slate-900 truncate">{selectedConversation.contact.name}</p>
+                    <div className="flex items-center gap-2">
+                      <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${getLabelBgColor(selectedConversation.contact.label)}`}>
+                        {getLabelText(selectedConversation.contact.label)}
+                      </span>
+                      <span className="text-xs text-slate-400">{selectedConversation.contact.phone}</span>
+                    </div>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <button className="p-2 hover:bg-slate-100 rounded-xl transition-colors">
-                    <svg className="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                    </svg>
-                  </button>
-                  <button className="p-2 hover:bg-slate-100 rounded-xl transition-colors">
-                    <svg className="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
-                    </svg>
-                  </button>
+
+                {/* Right side: label dropdown + action buttons */}
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  {/* Manual label change dropdown */}
+                  <select
+                    value={selectedConversation.contact.label}
+                    onChange={(e) => handleUpdateLabel(selectedConversation.contact.id, e.target.value as ContactLabel)}
+                    disabled={updatingLabel}
+                    className="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-primary-400 disabled:opacity-50"
+                  >
+                    <option value="NEW">🆕 Novo</option>
+                    <option value="VISITA">🟡 Visita Marcada</option>
+                    <option value="LEAD_FRIO">🔵 Lead Frio</option>
+                    <option value="CLIENTE">🟢 Cliente</option>
+                    <option value="PROFISSIONAL">👤 Profissional</option>
+                    <option value="CURRICULO">📄 Currículo</option>
+                  </select>
+
+                  {/* Contextual action buttons */}
+                  {actionButtons.map((btn) => (
+                    <button
+                      key={btn.targetLabel}
+                      onClick={() => handleUpdateLabel(selectedConversation.contact.id, btn.targetLabel)}
+                      disabled={updatingLabel}
+                      className={`text-xs font-medium px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 ${btn.color}`}
+                    >
+                      {btn.label}
+                    </button>
+                  ))}
                 </div>
               </div>
 
-              {/* Messages */}
+              {/* Messages area */}
               <div className="flex-1 overflow-y-auto p-4 space-y-3">
                 {selectedConversation.messages.map((msg) => (
                   <div
@@ -234,10 +416,10 @@ export default function InboxPage() {
                     className={`flex ${msg.direction === 'OUTBOUND' ? 'justify-end' : 'justify-start'}`}
                   >
                     <div
-                      className={`max-w-xs lg:max-w-md px-4 py-2.5 rounded-2xl text-sm ${
+                      className={`max-w-xs lg:max-w-md xl:max-w-lg px-4 py-2.5 rounded-2xl text-sm ${
                         msg.direction === 'OUTBOUND'
                           ? 'bg-primary-600 text-white rounded-br-md'
-                          : 'bg-white text-slate-800 shadow-soft rounded-bl-md'
+                          : 'bg-white text-slate-800 shadow-sm rounded-bl-md'
                       }`}
                     >
                       <p className="leading-relaxed">{msg.content}</p>
@@ -254,7 +436,7 @@ export default function InboxPage() {
               </div>
 
               {/* Quick replies */}
-              <div className="px-4 pb-2 flex gap-2 overflow-x-auto scrollbar-thin">
+              <div className="px-4 pb-2 flex gap-2 overflow-x-auto">
                 {quickReplies.map((reply) => (
                   <button
                     key={reply}
@@ -266,7 +448,7 @@ export default function InboxPage() {
                 ))}
               </div>
 
-              {/* Message Input */}
+              {/* Message input */}
               <div className="bg-white border-t border-slate-200 p-4">
                 <div className="flex items-end gap-3">
                   <div className="flex-1 bg-slate-100 rounded-2xl px-4 py-3">
@@ -307,13 +489,13 @@ export default function InboxPage() {
           ) : (
             <div className="flex-1 flex items-center justify-center">
               <div className="text-center">
-                <div className="w-20 h-20 bg-slate-200 rounded-3xl flex items-center justify-center mx-auto mb-6">
+                <div className="w-20 h-20 bg-slate-100 rounded-3xl flex items-center justify-center mx-auto mb-6">
                   <svg className="w-10 h-10 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 3H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z" />
                   </svg>
                 </div>
                 <h3 className="text-slate-600 font-semibold text-lg">Selecione uma conversa</h3>
-                <p className="text-slate-400 text-sm mt-1">Escolha uma conversa ao lado para começar</p>
+                <p className="text-slate-400 text-sm mt-1">Use as abas para filtrar por etiqueta</p>
               </div>
             </div>
           )}

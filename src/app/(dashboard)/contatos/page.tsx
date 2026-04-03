@@ -2,17 +2,16 @@
 
 import { useEffect, useState } from 'react'
 import Topbar from '@/components/layout/Topbar'
-import ContactCard from '@/components/ui/ContactCard'
 import Badge from '@/components/ui/Badge'
 import Modal from '@/components/ui/Modal'
-import type { Contact, Message, Session, ContactType, ContactStatus } from '@/types'
+import type { Contact, Message, Session, ContactLabel } from '@/types'
 import {
   formatPhone,
   formatDateTime,
-  getContactTypeLabel,
-  getContactTypeColor,
-  getStatusLabel,
-  getStatusColor,
+  getLabelText,
+  getLabelBgColor,
+  getLabelHex,
+  getLabelEmoji,
   getSpecialtyLabel,
   getSpecialtyColor,
   getSessionStatusLabel,
@@ -26,44 +25,23 @@ interface ContactWithDetails extends Contact {
   sessions?: Session[]
 }
 
-const CONTACT_TYPES: { value: ContactType | ''; label: string }[] = [
-  { value: '', label: 'Todos os tipos' },
-  { value: 'NEW_CONTACT', label: 'Novo Contato' },
-  { value: 'PARENT_CLIENT', label: 'Responsável/Paciente' },
-  { value: 'PROFESSIONAL', label: 'Profissional' },
-]
-
-const CONTACT_STATUSES: { value: ContactStatus | ''; label: string }[] = [
-  { value: '', label: 'Todos os status' },
-  { value: 'ACTIVE', label: 'Ativo' },
-  { value: 'PENDING', label: 'Pendente' },
-  { value: 'INACTIVE', label: 'Inativo' },
-]
-
-const SPECIALTIES = [
-  { value: 'FONOAUDIOLOGIA', label: 'Fonoaudiologia' },
-  { value: 'TERAPIA_OCUPACIONAL', label: 'Terapia Ocupacional' },
-  { value: 'PSICOLOGIA', label: 'Psicologia' },
-  { value: 'ABA', label: 'ABA' },
-  { value: 'PSICOMOTRICIDADE', label: 'Psicomotricidade' },
-]
+const ALL_LABELS: ContactLabel[] = ['NEW', 'VISITA', 'LEAD_FRIO', 'CLIENTE', 'PROFISSIONAL', 'CURRICULO']
 
 export default function ContatosPage() {
   const [contacts, setContacts] = useState<ContactWithDetails[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
-  const [filterType, setFilterType] = useState<ContactType | ''>('')
-  const [filterStatus, setFilterStatus] = useState<ContactStatus | ''>('')
+  const [filterLabel, setFilterLabel] = useState<ContactLabel | ''>('')
   const [selectedContact, setSelectedContact] = useState<ContactWithDetails | null>(null)
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [createLoading, setCreateLoading] = useState(false)
+  const [changingLabel, setChangingLabel] = useState<string | null>(null)
 
   // Create form state
   const [newName, setNewName] = useState('')
   const [newPhone, setNewPhone] = useState('')
   const [newEmail, setNewEmail] = useState('')
-  const [newType, setNewType] = useState<ContactType>('NEW_CONTACT')
-  const [newStatus, setNewStatus] = useState<ContactStatus>('PENDING')
+  const [newLabel, setNewLabel] = useState<ContactLabel>('NEW')
   const [newNotes, setNewNotes] = useState('')
 
   async function loadContacts() {
@@ -71,8 +49,7 @@ export default function ContatosPage() {
     try {
       const params = new URLSearchParams()
       if (search) params.set('search', search)
-      if (filterType) params.set('type', filterType)
-      if (filterStatus) params.set('status', filterStatus)
+      if (filterLabel) params.set('label', filterLabel)
 
       const res = await fetch(`/api/contatos?${params}`)
       if (res.ok) {
@@ -98,9 +75,32 @@ export default function ContatosPage() {
     }
   }
 
+  async function handleChangeLabel(contactId: string, label: ContactLabel) {
+    setChangingLabel(contactId)
+    try {
+      const res = await fetch(`/api/contatos/${contactId}/label`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label }),
+      })
+      if (res.ok) {
+        setContacts((prev) =>
+          prev.map((c) => (c.id === contactId ? { ...c, label } : c))
+        )
+        if (selectedContact?.id === contactId) {
+          setSelectedContact((prev) => prev ? { ...prev, label } : prev)
+        }
+      }
+    } catch (error) {
+      console.error('Erro ao mudar etiqueta:', error)
+    } finally {
+      setChangingLabel(null)
+    }
+  }
+
   useEffect(() => {
     loadContacts()
-  }, [search, filterType, filterStatus])
+  }, [search, filterLabel])
 
   async function handleCreateContact() {
     if (!newName || !newPhone) return
@@ -114,8 +114,7 @@ export default function ContatosPage() {
           name: newName,
           phone: newPhone,
           email: newEmail || undefined,
-          type: newType,
-          status: newStatus,
+          label: newLabel,
           notes: newNotes || undefined,
         }),
       })
@@ -126,6 +125,7 @@ export default function ContatosPage() {
         setNewPhone('')
         setNewEmail('')
         setNewNotes('')
+        setNewLabel('NEW')
         loadContacts()
       }
     } catch (error) {
@@ -135,15 +135,20 @@ export default function ContatosPage() {
     }
   }
 
+  // Count per label for the sidebar filter
+  const countByLabel = ALL_LABELS.reduce<Record<string, number>>((acc, lbl) => {
+    acc[lbl] = contacts.filter((c) => c.label === lbl).length
+    return acc
+  }, {})
+
   return (
     <div>
       <Topbar title="Contatos" />
 
       <div className="p-6">
-        {/* Header actions */}
+        {/* Header */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
-          <div className="flex flex-wrap items-center gap-3 flex-1">
-            {/* Search */}
+          <div className="flex items-center gap-3 flex-1">
             <div className="relative">
               <svg className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -156,28 +161,6 @@ export default function ContatosPage() {
                 className="pl-9 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 w-64"
               />
             </div>
-
-            {/* Type filter */}
-            <select
-              value={filterType}
-              onChange={(e) => setFilterType(e.target.value as ContactType | '')}
-              className="px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-primary-500"
-            >
-              {CONTACT_TYPES.map((t) => (
-                <option key={t.value} value={t.value}>{t.label}</option>
-              ))}
-            </select>
-
-            {/* Status filter */}
-            <select
-              value={filterStatus}
-              onChange={(e) => setFilterStatus(e.target.value as ContactStatus | '')}
-              className="px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-primary-500"
-            >
-              {CONTACT_STATUSES.map((s) => (
-                <option key={s.value} value={s.value}>{s.label}</option>
-              ))}
-            </select>
           </div>
 
           <button
@@ -191,14 +174,51 @@ export default function ContatosPage() {
           </button>
         </div>
 
-        {/* Results count */}
-        <p className="text-sm text-slate-500 mb-4">
-          {loading ? 'Carregando...' : `${contacts.length} contato${contacts.length !== 1 ? 's' : ''} encontrado${contacts.length !== 1 ? 's' : ''}`}
-        </p>
-
         <div className="flex gap-6">
-          {/* Contact Grid */}
-          <div className="flex-1">
+          {/* Label filter sidebar */}
+          <div className="w-48 flex-shrink-0">
+            <div className="bg-white rounded-2xl border border-slate-100 p-3 space-y-1 sticky top-6">
+              <button
+                onClick={() => setFilterLabel('')}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-sm transition-colors ${
+                  filterLabel === ''
+                    ? 'bg-primary-50 text-primary-700 font-medium'
+                    : 'text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                <span>Todos</span>
+                <span className="text-xs bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full">{contacts.length}</span>
+              </button>
+
+              {ALL_LABELS.map((lbl) => (
+                <button
+                  key={lbl}
+                  onClick={() => setFilterLabel(lbl === filterLabel ? '' : lbl)}
+                  className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-sm transition-colors ${
+                    filterLabel === lbl
+                      ? 'font-medium'
+                      : 'text-slate-600 hover:bg-slate-50'
+                  }`}
+                  style={filterLabel === lbl ? { backgroundColor: `${getLabelHex(lbl)}18`, color: getLabelHex(lbl) } : {}}
+                >
+                  <span className="flex items-center gap-2">
+                    <span>{getLabelEmoji(lbl)}</span>
+                    <span className="truncate">{getLabelText(lbl)}</span>
+                  </span>
+                  <span className="text-xs bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full flex-shrink-0">
+                    {countByLabel[lbl] ?? 0}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Contact list */}
+          <div className="flex-1 min-w-0">
+            <p className="text-sm text-slate-500 mb-4">
+              {loading ? 'Carregando...' : `${contacts.length} contato${contacts.length !== 1 ? 's' : ''}`}
+            </p>
+
             {loading ? (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {[1, 2, 3, 4, 5, 6].map((i) => (
@@ -219,32 +239,81 @@ export default function ContatosPage() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
                 </svg>
                 <p className="text-slate-500 font-medium">Nenhum contato encontrado</p>
-                <p className="text-slate-400 text-sm mt-1">Tente ajustar os filtros ou criar um novo contato</p>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {contacts.map((contact) => (
-                  <ContactCard
+                  <div
                     key={contact.id}
-                    contact={contact}
-                    selected={selectedContact?.id === contact.id}
+                    className={`bg-white rounded-2xl border p-4 cursor-pointer transition-all hover:shadow-md ${
+                      selectedContact?.id === contact.id
+                        ? 'border-primary-300 shadow-md ring-1 ring-primary-200'
+                        : 'border-slate-100'
+                    }`}
                     onClick={() => loadContactDetails(contact.id)}
-                  />
+                  >
+                    <div className="flex items-start gap-3">
+                      <div
+                        className="w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold text-sm flex-shrink-0"
+                        style={{ backgroundColor: getLabelHex(contact.label) }}
+                      >
+                        {getInitials(contact.name)}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold text-slate-900 truncate">{contact.name}</p>
+                        <p className="text-xs text-slate-500">{formatPhone(contact.phone)}</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 flex items-center justify-between gap-2">
+                      <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${getLabelBgColor(contact.label)}`}>
+                        {getLabelEmoji(contact.label)} {getLabelText(contact.label)}
+                      </span>
+
+                      {/* Quick label change */}
+                      <select
+                        value={contact.label}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => {
+                          e.stopPropagation()
+                          handleChangeLabel(contact.id, e.target.value as ContactLabel)
+                        }}
+                        disabled={changingLabel === contact.id}
+                        className="text-[11px] border border-slate-200 rounded-lg px-1.5 py-1 bg-white text-slate-600 focus:outline-none disabled:opacity-50"
+                      >
+                        <option value="NEW">🆕 Novo</option>
+                        <option value="VISITA">🟡 Visita</option>
+                        <option value="LEAD_FRIO">🔵 Lead Frio</option>
+                        <option value="CLIENTE">🟢 Cliente</option>
+                        <option value="PROFISSIONAL">👤 Profissional</option>
+                        <option value="CURRICULO">📄 Currículo</option>
+                      </select>
+                    </div>
+
+                    {contact.lastMessage && (
+                      <p className="text-xs text-slate-400 mt-2 truncate">
+                        {contact.lastMessage.direction === 'OUTBOUND' ? '→ ' : '← '}
+                        {contact.lastMessage.content}
+                      </p>
+                    )}
+                  </div>
                 ))}
               </div>
             )}
           </div>
 
-          {/* Contact Detail Drawer */}
+          {/* Contact detail drawer */}
           {selectedContact && (
             <div className="w-96 flex-shrink-0">
               <div className="bg-white rounded-2xl shadow-soft border border-slate-100 sticky top-6">
-                {/* Header */}
                 <div className="p-6 border-b border-slate-100">
                   <div className="flex items-start justify-between">
                     <div className="flex items-start gap-3">
-                      <div className="w-12 h-12 bg-primary-100 rounded-xl flex items-center justify-center">
-                        <span className="text-primary-600 font-bold text-lg">{getInitials(selectedContact.name)}</span>
+                      <div
+                        className="w-12 h-12 rounded-xl flex items-center justify-center text-white font-bold text-lg"
+                        style={{ backgroundColor: getLabelHex(selectedContact.label) }}
+                      >
+                        {getInitials(selectedContact.name)}
                       </div>
                       <div>
                         <h3 className="font-bold text-slate-900 text-lg">{selectedContact.name}</h3>
@@ -264,21 +333,27 @@ export default function ContatosPage() {
                     </button>
                   </div>
 
-                  <div className="flex gap-2 mt-4">
-                    <Badge
-                      label={getContactTypeLabel(selectedContact.type)}
-                      variant={getContactTypeColor(selectedContact.type) as 'default' | 'success' | 'warning' | 'error' | 'info'}
-                    />
-                    <Badge
-                      label={getStatusLabel(selectedContact.status)}
-                      variant={getStatusColor(selectedContact.status) as 'default' | 'success' | 'warning' | 'error' | 'info'}
-                      dot
-                    />
+                  <div className="mt-4 flex items-center gap-2">
+                    <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${getLabelBgColor(selectedContact.label)}`}>
+                      {getLabelEmoji(selectedContact.label)} {getLabelText(selectedContact.label)}
+                    </span>
+                    <select
+                      value={selectedContact.label}
+                      onChange={(e) => handleChangeLabel(selectedContact.id, e.target.value as ContactLabel)}
+                      disabled={changingLabel === selectedContact.id}
+                      className="text-xs border border-slate-200 rounded-lg px-2 py-1 bg-white text-slate-600 focus:outline-none"
+                    >
+                      <option value="NEW">🆕 Novo</option>
+                      <option value="VISITA">🟡 Visita Marcada</option>
+                      <option value="LEAD_FRIO">🔵 Lead Frio</option>
+                      <option value="CLIENTE">🟢 Cliente</option>
+                      <option value="PROFISSIONAL">👤 Profissional</option>
+                      <option value="CURRICULO">📄 Currículo</option>
+                    </select>
                   </div>
                 </div>
 
                 <div className="p-6 max-h-[600px] overflow-y-auto space-y-6">
-                  {/* Assigned to */}
                   {selectedContact.assignedTo && (
                     <div>
                       <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Responsável</p>
@@ -291,7 +366,6 @@ export default function ContatosPage() {
                     </div>
                   )}
 
-                  {/* Notes */}
                   {selectedContact.notes && (
                     <div>
                       <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Observações</p>
@@ -299,10 +373,11 @@ export default function ContatosPage() {
                     </div>
                   )}
 
-                  {/* Sessions */}
                   {selectedContact.sessions && selectedContact.sessions.length > 0 && (
                     <div>
-                      <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Sessões ({selectedContact.sessions.length})</p>
+                      <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">
+                        Sessões ({selectedContact.sessions.length})
+                      </p>
                       <div className="space-y-2">
                         {selectedContact.sessions.slice(0, 3).map((session) => (
                           <div key={session.id} className="bg-slate-50 rounded-xl p-3">
@@ -322,7 +397,6 @@ export default function ContatosPage() {
                     </div>
                   )}
 
-                  {/* Messages */}
                   {selectedContact.messages && selectedContact.messages.length > 0 && (
                     <div>
                       <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Últimas Mensagens</p>
@@ -363,68 +437,30 @@ export default function ContatosPage() {
         <div className="space-y-4">
           <div>
             <label className="label">Nome *</label>
-            <input
-              type="text"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              className="input"
-              placeholder="Nome completo"
-            />
+            <input type="text" value={newName} onChange={(e) => setNewName(e.target.value)} className="input" placeholder="Nome completo" />
           </div>
           <div>
             <label className="label">Telefone / WhatsApp *</label>
-            <input
-              type="tel"
-              value={newPhone}
-              onChange={(e) => setNewPhone(e.target.value)}
-              className="input"
-              placeholder="11987654321"
-            />
+            <input type="tel" value={newPhone} onChange={(e) => setNewPhone(e.target.value)} className="input" placeholder="11987654321" />
           </div>
           <div>
             <label className="label">E-mail</label>
-            <input
-              type="email"
-              value={newEmail}
-              onChange={(e) => setNewEmail(e.target.value)}
-              className="input"
-              placeholder="email@exemplo.com"
-            />
+            <input type="email" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} className="input" placeholder="email@exemplo.com" />
           </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="label">Tipo</label>
-              <select
-                value={newType}
-                onChange={(e) => setNewType(e.target.value as ContactType)}
-                className="input"
-              >
-                <option value="NEW_CONTACT">Novo Contato</option>
-                <option value="PARENT_CLIENT">Responsável/Paciente</option>
-                <option value="PROFESSIONAL">Profissional</option>
-              </select>
-            </div>
-            <div>
-              <label className="label">Status</label>
-              <select
-                value={newStatus}
-                onChange={(e) => setNewStatus(e.target.value as ContactStatus)}
-                className="input"
-              >
-                <option value="PENDING">Pendente</option>
-                <option value="ACTIVE">Ativo</option>
-                <option value="INACTIVE">Inativo</option>
-              </select>
-            </div>
+          <div>
+            <label className="label">Etiqueta</label>
+            <select value={newLabel} onChange={(e) => setNewLabel(e.target.value as ContactLabel)} className="input">
+              <option value="NEW">🆕 Novo</option>
+              <option value="VISITA">🟡 Visita Marcada</option>
+              <option value="LEAD_FRIO">🔵 Lead Frio</option>
+              <option value="CLIENTE">🟢 Cliente</option>
+              <option value="PROFISSIONAL">👤 Profissional</option>
+              <option value="CURRICULO">📄 Currículo</option>
+            </select>
           </div>
           <div>
             <label className="label">Observações</label>
-            <textarea
-              value={newNotes}
-              onChange={(e) => setNewNotes(e.target.value)}
-              className="input resize-none h-24"
-              placeholder="Informações relevantes sobre o contato..."
-            />
+            <textarea value={newNotes} onChange={(e) => setNewNotes(e.target.value)} className="input resize-none h-24" placeholder="Informações relevantes..." />
           </div>
         </div>
       </Modal>

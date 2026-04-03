@@ -21,13 +21,11 @@ export async function GET(req: Request) {
     const contactId = searchParams.get('contactId')
 
     if (contactId) {
-      // Return messages for a specific contact
       const messages = await prisma.message.findMany({
         where: { clinicId, contactId },
         orderBy: { createdAt: 'asc' },
       })
 
-      // Mark as read
       await prisma.message.updateMany({
         where: { clinicId, contactId, read: false, direction: 'INBOUND' },
         data: { read: true },
@@ -36,7 +34,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ messages })
     }
 
-    // Return grouped conversations
+    // Return grouped conversations — include label in contact data
     const contacts = await prisma.contact.findMany({
       where: { clinicId },
       include: {
@@ -48,12 +46,11 @@ export async function GET(req: Request) {
       orderBy: { createdAt: 'desc' },
     })
 
-    // Filter contacts that have messages and sort by last message
     const conversations = contacts
       .filter((c) => c.messages.length > 0)
       .map((c) => {
-        const messages = [...c.messages].reverse() // put in chronological order
-        const lastMessage = c.messages[0] // most recent (already sorted desc)
+        const messages = [...c.messages].reverse()
+        const lastMessage = c.messages[0]
         const unreadCount = c.messages.filter((m) => !m.read && m.direction === 'INBOUND').length
 
         return {
@@ -63,7 +60,7 @@ export async function GET(req: Request) {
             phone: c.phone,
             email: c.email,
             type: c.type,
-            status: c.status,
+            label: c.label,
             clinicId: c.clinicId,
             assignedToId: c.assignedToId,
             notes: c.notes,
@@ -75,6 +72,9 @@ export async function GET(req: Request) {
         }
       })
       .sort((a, b) => {
+        // Unread first, then by most recent
+        if (a.unreadCount > 0 && b.unreadCount === 0) return -1
+        if (a.unreadCount === 0 && b.unreadCount > 0) return 1
         const aTime = a.lastMessage ? new Date(a.lastMessage.createdAt).getTime() : 0
         const bTime = b.lastMessage ? new Date(b.lastMessage.createdAt).getTime() : 0
         return bTime - aTime
@@ -107,11 +107,7 @@ export async function POST(req: Request) {
 
     const { contactId, content, channel } = result.data
 
-    // Verify contact belongs to clinic
-    const contact = await prisma.contact.findFirst({
-      where: { id: contactId, clinicId },
-    })
-
+    const contact = await prisma.contact.findFirst({ where: { id: contactId, clinicId } })
     if (!contact) {
       return NextResponse.json({ error: 'Contato não encontrado' }, { status: 404 })
     }

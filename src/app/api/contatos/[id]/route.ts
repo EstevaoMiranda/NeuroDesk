@@ -8,7 +8,7 @@ const updateContactSchema = z.object({
   phone: z.string().min(8).optional(),
   email: z.string().email().optional().or(z.literal('')),
   type: z.enum(['NEW_CONTACT', 'PARENT_CLIENT', 'PROFESSIONAL']).optional(),
-  status: z.enum(['ACTIVE', 'INACTIVE', 'PENDING']).optional(),
+  label: z.enum(['NEW', 'VISITA', 'LEAD_FRIO', 'CLIENTE', 'PROFISSIONAL', 'CURRICULO']).optional(),
   assignedToId: z.string().optional().nullable(),
   notes: z.string().optional().nullable(),
 })
@@ -36,9 +36,7 @@ export async function GET(
         },
         sessions: {
           include: {
-            therapist: {
-              select: { id: true, name: true },
-            },
+            therapist: { select: { id: true, name: true } },
           },
           orderBy: { scheduledAt: 'desc' },
           take: 10,
@@ -78,10 +76,7 @@ export async function PUT(
       )
     }
 
-    const existing = await prisma.contact.findFirst({
-      where: { id: params.id, clinicId },
-    })
-
+    const existing = await prisma.contact.findFirst({ where: { id: params.id, clinicId } })
     if (!existing) {
       return NextResponse.json({ error: 'Contato não encontrado' }, { status: 404 })
     }
@@ -93,15 +88,54 @@ export async function PUT(
         email: result.data.email || null,
       },
       include: {
-        assignedTo: {
-          select: { id: true, name: true, email: true },
-        },
+        assignedTo: { select: { id: true, name: true, email: true } },
       },
     })
 
     return NextResponse.json({ contact })
   } catch (error) {
     console.error('PUT /contatos/[id] error:', error)
+    return NextResponse.json({ error: 'Erro interno' }, { status: 500 })
+  }
+}
+
+export async function PATCH(
+  req: Request,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const token = getTokenFromRequest(req)
+    if (!token) return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
+
+    const payload = await verifyToken(token)
+    const { clinicId } = payload
+
+    const body = await req.json()
+    const result = updateContactSchema.safeParse(body)
+
+    if (!result.success) {
+      return NextResponse.json(
+        { error: result.error.errors[0].message },
+        { status: 400 }
+      )
+    }
+
+    const existing = await prisma.contact.findFirst({ where: { id: params.id, clinicId } })
+    if (!existing) {
+      return NextResponse.json({ error: 'Contato não encontrado' }, { status: 404 })
+    }
+
+    const contact = await prisma.contact.update({
+      where: { id: params.id },
+      data: result.data,
+      include: {
+        assignedTo: { select: { id: true, name: true, email: true } },
+      },
+    })
+
+    return NextResponse.json({ contact })
+  } catch (error) {
+    console.error('PATCH /contatos/[id] error:', error)
     return NextResponse.json({ error: 'Erro interno' }, { status: 500 })
   }
 }
@@ -117,10 +151,7 @@ export async function DELETE(
     const payload = await verifyToken(token)
     const { clinicId } = payload
 
-    const existing = await prisma.contact.findFirst({
-      where: { id: params.id, clinicId },
-    })
-
+    const existing = await prisma.contact.findFirst({ where: { id: params.id, clinicId } })
     if (!existing) {
       return NextResponse.json({ error: 'Contato não encontrado' }, { status: 404 })
     }

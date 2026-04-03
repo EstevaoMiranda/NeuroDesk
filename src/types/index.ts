@@ -2,7 +2,7 @@ export type Plan = 'ESSENCIAL' | 'CLINICA' | 'REDE'
 export type UserRole = 'ADMIN' | 'MANAGER' | 'THERAPIST' | 'RECEPTIONIST'
 export type Specialty = 'FONOAUDIOLOGIA' | 'TERAPIA_OCUPACIONAL' | 'PSICOLOGIA' | 'ABA' | 'PSICOMOTRICIDADE'
 export type ContactType = 'NEW_CONTACT' | 'PARENT_CLIENT' | 'PROFESSIONAL'
-export type ContactStatus = 'ACTIVE' | 'INACTIVE' | 'PENDING'
+export type ContactLabel = 'NEW' | 'VISITA' | 'LEAD_FRIO' | 'CLIENTE' | 'PROFISSIONAL' | 'CURRICULO'
 export type SessionStatus = 'SCHEDULED' | 'CONFIRMED' | 'COMPLETED' | 'CANCELLED' | 'NO_SHOW'
 export type Direction = 'INBOUND' | 'OUTBOUND'
 export type Channel = 'WHATSAPP' | 'INSTAGRAM' | 'MANUAL'
@@ -35,7 +35,7 @@ export interface Contact {
   phone: string
   email?: string | null
   type: ContactType
-  status: ContactStatus
+  label: ContactLabel
   clinicId: string
   clinic?: Clinic
   assignedToId?: string | null
@@ -102,10 +102,10 @@ export interface JWTPayload {
 
 // Dashboard metrics
 export interface DashboardMetrics {
-  totalContatos: number
-  sessoesHoje: number
-  mensagensNaoLidas: number
-  taxaResposta: number
+  novosContatos: number
+  visitasAgendadas: number
+  leadsFriosAlerta: number
+  taxaConversao: number
   atividadesRecentes: AtividadeRecente[]
 }
 
@@ -153,7 +153,7 @@ export interface ContactForm {
   phone: string
   email?: string
   type: ContactType
-  status: ContactStatus
+  label: ContactLabel
   assignedToId?: string
   notes?: string
 }
