@@ -6,7 +6,7 @@ import Modal from '@/components/ui/Modal'
 import type { Session, Contact, User, Specialty, SessionStatus } from '@/types'
 import { getSpecialtyLabel, getSpecialtyColor, getSessionStatusLabel, formatTime, getInitials } from '@/lib/utils'
 
-interface SessionWithRelations extends Session {
+interface SessionWithRelations extends Omit<Session, 'contact' | 'therapist'> {
   contact?: { id: string; name: string }
   therapist?: { id: string; name: string }
 }

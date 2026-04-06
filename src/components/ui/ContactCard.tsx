@@ -6,8 +6,8 @@ import {
   formatPhone,
   getContactTypeLabel,
   getContactTypeColor,
-  getStatusLabel,
-  getStatusColor,
+  getLabelText,
+  getLabelVariant,
   timeAgo,
 } from '@/lib/utils'
 import type { Contact, Message } from '@/types'
@@ -38,8 +38,8 @@ export default function ContactCard({ contact, onClick, selected }: ContactCardP
             <p className="font-semibold text-slate-900 text-sm truncate">{contact.name}</p>
             <div className="flex-shrink-0">
               <Badge
-                label={getStatusLabel(contact.status)}
-                variant={getStatusColor(contact.status) as 'default' | 'success' | 'warning' | 'error' | 'info'}
+                label={getLabelText(contact.label)}
+                variant={getLabelVariant(contact.label) as 'default' | 'success' | 'warning' | 'error' | 'info'}
                 dot
               />
             </div>

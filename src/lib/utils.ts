@@ -120,6 +120,18 @@ export function getContactTypeColor(type: ContactType): string {
   }
 }
 
+export function getLabelVariant(label: ContactLabel): string {
+  switch (label) {
+    case 'CLIENTE':      return 'success'
+    case 'VISITA':       return 'warning'
+    case 'LEAD_FRIO':    return 'info'
+    case 'PROFISSIONAL': return 'info'
+    case 'CURRICULO':    return 'warning'
+    case 'NEW':
+    default:             return 'default'
+  }
+}
+
 export function getSpecialtyLabel(specialty: Specialty): string {
   switch (specialty) {
     case 'FONOAUDIOLOGIA':    return 'Fonoaudiologia'
