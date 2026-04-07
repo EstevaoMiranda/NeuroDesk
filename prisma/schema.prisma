@@ -64,17 +64,19 @@ enum Channel {
 }
 
 model Clinic {
-  id                String    @id @default(cuid())
-  name              String
-  slug              String    @unique
-  plan              Plan      @default(ESSENCIAL)
-  whatsappInstance  String?
-  whatsappToken     String?
-  createdAt         DateTime  @default(now())
-  users             User[]
-  contacts          Contact[]
-  messages          Message[]
-  sessions          Session[]
+  id                 String    @id @default(cuid())
+  name               String
+  slug               String    @unique
+  plan               Plan      @default(ESSENCIAL)
+  whatsappInstance   String?
+  whatsappToken      String?
+  whatsappConnected  Boolean   @default(false)
+  whatsappPhone      String?
+  createdAt          DateTime  @default(now())
+  users              User[]
+  contacts           Contact[]
+  messages           Message[]
+  sessions           Session[]
 }
 
 model User {

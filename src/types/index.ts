@@ -14,6 +14,8 @@ export interface Clinic {
   plan: Plan
   whatsappInstance?: string | null
   whatsappToken?: string | null
+  whatsappConnected?: boolean
+  whatsappPhone?: string | null
   createdAt: Date
 }
 

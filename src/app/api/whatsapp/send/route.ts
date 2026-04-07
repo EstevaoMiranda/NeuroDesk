@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { getTokenFromRequest, verifyToken } from '@/lib/auth'
+import { sendTextMessage } from '@/lib/zapi'
 
 const sendMessageSchema = z.object({
   contactId: z.string().min(1),
@@ -20,54 +21,27 @@ export async function POST(req: Request) {
     const result = sendMessageSchema.safeParse(body)
 
     if (!result.success) {
-      return NextResponse.json(
-        { error: result.error.errors[0].message },
-        { status: 400 }
-      )
+      return NextResponse.json({ error: result.error.errors[0].message }, { status: 400 })
     }
 
     const { contactId, content } = result.data
 
-    // Get contact and clinic info
     const [contact, clinic] = await Promise.all([
       prisma.contact.findFirst({ where: { id: contactId, clinicId } }),
       prisma.clinic.findUnique({ where: { id: clinicId } }),
     ])
 
-    if (!contact) {
-      return NextResponse.json({ error: 'Contato não encontrado' }, { status: 404 })
-    }
-
-    if (!clinic) {
-      return NextResponse.json({ error: 'Clínica não encontrada' }, { status: 404 })
-    }
+    if (!contact) return NextResponse.json({ error: 'Contato não encontrado' }, { status: 404 })
+    if (!clinic)  return NextResponse.json({ error: 'Clínica não encontrada' }, { status: 404 })
 
     // Send via Z-API if configured
     if (clinic.whatsappInstance && clinic.whatsappToken) {
-      const zapiBaseUrl = process.env.ZAPI_BASE_URL || 'https://api.z-api.io'
       const phone = contact.phone.replace(/\D/g, '')
-
       try {
-        const zapiResponse = await fetch(
-          `${zapiBaseUrl}/instances/${clinic.whatsappInstance}/token/${clinic.whatsappToken}/send-text`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              phone,
-              message: content,
-            }),
-          }
-        )
-
-        if (!zapiResponse.ok) {
-          const errorData = await zapiResponse.json().catch(() => ({}))
-          console.error('Z-API send error:', errorData)
-          // Continue to save in DB even if send fails
-        }
+        await sendTextMessage(clinic.whatsappInstance, clinic.whatsappToken, phone, content)
       } catch (zapiError) {
-        console.error('Z-API connection error:', zapiError)
-        // Continue to save in DB even if send fails
+        console.error('Z-API send error:', zapiError)
+        // Continue saving to DB even if send fails
       }
     }
 

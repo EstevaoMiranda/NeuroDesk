@@ -13,6 +13,20 @@ import {
   daysSince,
 } from '@/lib/utils'
 
+function isAudioMessage(content: string): boolean {
+  return content.startsWith('[Áudio') || content.startsWith('[Audio')
+}
+
+function parseAudioContent(content: string): { duration?: string; transcription?: string } {
+  // [Áudio 32s] Bom dia, gostaria de saber...
+  // [Áudio]
+  const match = content.match(/^\[Áudio(?:\s+(\d+)s)?\](?:\s+(.+))?$/)
+  if (match) {
+    return { duration: match[1], transcription: match[2] }
+  }
+  return { transcription: content.replace(/^\[Áudio[^\]]*\]\s*/, '') }
+}
+
 interface ConversationItem {
   contact: Contact
   messages: Message[]
@@ -90,23 +104,55 @@ export default function InboxPage() {
   const [sendingMessage, setSendingMessage] = useState(false)
   const [newMessage, setNewMessage] = useState('')
   const [updatingLabel, setUpdatingLabel] = useState(false)
+  const [waConnected, setWaConnected] = useState<boolean | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const selectedContactIdRef = useRef<string | null>(null)
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  async function loadConversations() {
+  async function loadConversations(silent = false) {
     try {
       const res = await fetch('/api/mensagens')
       if (res.ok) {
         const data = await res.json()
-        setConversations(data.conversations || [])
+        const newConvs: ConversationItem[] = data.conversations || []
+        setConversations(newConvs)
+
+        // If a conversation is selected, refresh its messages
+        if (selectedContactIdRef.current) {
+          const updated = newConvs.find((c) => c.contact.id === selectedContactIdRef.current)
+          if (updated) {
+            setSelectedConversation((prev) => {
+              if (!prev) return updated
+              // Only update if there are new messages
+              if (updated.messages.length > prev.messages.length) {
+                return { ...updated, unreadCount: 0 }
+              }
+              return prev
+            })
+          }
+        }
       }
     } catch (error) {
-      console.error('Erro ao carregar conversas:', error)
+      if (!silent) console.error('Erro ao carregar conversas:', error)
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
+    }
+  }
+
+  async function checkWaStatus() {
+    try {
+      const res = await fetch('/api/clinica/whatsapp/status')
+      if (res.ok) {
+        const data = await res.json()
+        setWaConnected(data.connected === true)
+      }
+    } catch {
+      // ignore
     }
   }
 
   async function selectConversation(conv: ConversationItem) {
+    selectedContactIdRef.current = conv.contact.id
     setSelectedConversation(conv)
     if (conv.unreadCount > 0) {
       setConversations((prev) =>
@@ -189,7 +235,15 @@ export default function InboxPage() {
     }
   }
 
-  useEffect(() => { loadConversations() }, [])
+  useEffect(() => {
+    loadConversations()
+    checkWaStatus()
+    // Poll for new messages every 5 seconds
+    pollingRef.current = setInterval(() => loadConversations(true), 5000)
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current)
+    }
+  }, [])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -228,6 +282,16 @@ export default function InboxPage() {
       <div className="flex flex-1 overflow-hidden">
         {/* ── LEFT PANEL ────────────────────────────────── */}
         <div className="w-80 flex-shrink-0 border-r border-slate-200 bg-white flex flex-col">
+
+          {/* WhatsApp status indicator */}
+          {waConnected !== null && (
+            <div className={`flex items-center gap-1.5 px-4 py-2 text-xs font-medium border-b ${
+              waConnected ? 'bg-green-50 text-green-700 border-green-100' : 'bg-amber-50 text-amber-700 border-amber-100'
+            }`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${waConnected ? 'bg-green-500' : 'bg-amber-400 animate-pulse'}`} />
+              {waConnected ? 'WhatsApp conectado' : 'WhatsApp desconectado'}
+            </div>
+          )}
 
           {/* Tab bar */}
           <div className="border-b border-slate-100 overflow-x-auto">
@@ -410,28 +474,50 @@ export default function InboxPage() {
 
               {/* Messages area */}
               <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                {selectedConversation.messages.map((msg) => (
-                  <div
-                    key={msg.id}
-                    className={`flex ${msg.direction === 'OUTBOUND' ? 'justify-end' : 'justify-start'}`}
-                  >
+                {selectedConversation.messages.map((msg) => {
+                  const audio = isAudioMessage(msg.content)
+                  const audioData = audio ? parseAudioContent(msg.content) : null
+                  return (
                     <div
-                      className={`max-w-xs lg:max-w-md xl:max-w-lg px-4 py-2.5 rounded-2xl text-sm ${
-                        msg.direction === 'OUTBOUND'
-                          ? 'bg-primary-600 text-white rounded-br-md'
-                          : 'bg-white text-slate-800 shadow-sm rounded-bl-md'
-                      }`}
+                      key={msg.id}
+                      className={`flex ${msg.direction === 'OUTBOUND' ? 'justify-end' : 'justify-start'}`}
                     >
-                      <p className="leading-relaxed">{msg.content}</p>
-                      <p className={`text-xs mt-1 ${msg.direction === 'OUTBOUND' ? 'text-primary-200' : 'text-slate-400'}`}>
-                        {formatDateTime(msg.createdAt)}
-                        {msg.direction === 'OUTBOUND' && (
-                          <span className="ml-1">{msg.read ? '✓✓' : '✓'}</span>
+                      <div
+                        className={`max-w-xs lg:max-w-md xl:max-w-lg px-4 py-2.5 rounded-2xl text-sm ${
+                          msg.direction === 'OUTBOUND'
+                            ? 'bg-primary-600 text-white rounded-br-md'
+                            : 'bg-white text-slate-800 shadow-sm rounded-bl-md'
+                        }`}
+                      >
+                        {audio && audioData ? (
+                          <div>
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-base">🎵</span>
+                              <span className="font-medium">
+                                Áudio{audioData.duration ? ` (${audioData.duration}s)` : ''}
+                              </span>
+                            </div>
+                            {audioData.transcription && (
+                              <p className={`text-xs leading-relaxed mt-1 ${
+                                msg.direction === 'OUTBOUND' ? 'text-primary-100' : 'text-slate-500'
+                              }`}>
+                                Transcrição: &ldquo;{audioData.transcription}&rdquo;
+                              </p>
+                            )}
+                          </div>
+                        ) : (
+                          <p className="leading-relaxed">{msg.content}</p>
                         )}
-                      </p>
+                        <p className={`text-xs mt-1 ${msg.direction === 'OUTBOUND' ? 'text-primary-200' : 'text-slate-400'}`}>
+                          {formatDateTime(msg.createdAt)}
+                          {msg.direction === 'OUTBOUND' && (
+                            <span className="ml-1">{msg.read ? '✓✓' : '✓'}</span>
+                          )}
+                        </p>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
                 <div ref={messagesEndRef} />
               </div>
 

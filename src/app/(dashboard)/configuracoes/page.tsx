@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import Topbar from '@/components/layout/Topbar'
 import Modal from '@/components/ui/Modal'
 import Badge from '@/components/ui/Badge'
@@ -8,6 +8,7 @@ import type { User, UserRole } from '@/types'
 import { getRoleLabel, getInitials } from '@/lib/utils'
 
 type Tab = 'clinica' | 'usuarios' | 'plano' | 'integracoes'
+type WaFlow = 'disconnected' | 'form' | 'qrcode' | 'connected'
 
 interface ClinicData {
   id: string
@@ -16,6 +17,8 @@ interface ClinicData {
   plan: string
   whatsappInstance?: string | null
   whatsappToken?: string | null
+  whatsappConnected?: boolean
+  whatsappPhone?: string | null
 }
 
 export default function ConfiguracoesPage() {
@@ -32,7 +35,11 @@ export default function ConfiguracoesPage() {
   const [waInstance, setWaInstance] = useState('')
   const [waToken, setWaToken] = useState('')
   const [waConnecting, setWaConnecting] = useState(false)
-  const [waStatus, setWaStatus] = useState<'disconnected' | 'connected' | 'connecting'>('disconnected')
+  const [waFlow, setWaFlow] = useState<WaFlow>('disconnected')
+  const [waPhone, setWaPhone] = useState<string | null>(null)
+  const [waQrCode, setWaQrCode] = useState<string | null>(null)
+  const [waQrLoading, setWaQrLoading] = useState(false)
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // Invite user modal
   const [showInviteModal, setShowInviteModal] = useState(false)
@@ -42,6 +49,49 @@ export default function ConfiguracoesPage() {
   const [inviteSpecialty, setInviteSpecialty] = useState('')
   const [invitePassword, setInvitePassword] = useState('')
   const [inviteLoading, setInviteLoading] = useState(false)
+
+  function stopPolling() {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current)
+      pollingRef.current = null
+    }
+  }
+
+  async function checkWaStatus() {
+    try {
+      const res = await fetch('/api/clinica/whatsapp/status')
+      if (!res.ok) return
+      const data = await res.json()
+      if (data.connected) {
+        stopPolling()
+        setWaFlow('connected')
+        setWaPhone(data.phone)
+        setWaQrCode(null)
+      }
+    } catch {
+      // ignore polling errors
+    }
+  }
+
+  function startPolling() {
+    stopPolling()
+    pollingRef.current = setInterval(checkWaStatus, 3000)
+  }
+
+  async function fetchQrCode() {
+    setWaQrLoading(true)
+    try {
+      const res = await fetch('/api/clinica/whatsapp/qrcode')
+      if (res.ok) {
+        const data = await res.json()
+        setWaQrCode(data.qrcode || null)
+      }
+    } catch (error) {
+      console.error('Erro ao buscar QR code:', error)
+    } finally {
+      setWaQrLoading(false)
+    }
+  }
 
   async function loadData() {
     try {
@@ -56,8 +106,11 @@ export default function ConfiguracoesPage() {
         setClinicName(c?.name || '')
         setWaInstance(c?.whatsappInstance || '')
         setWaToken(c?.whatsappToken || '')
-        if (c?.whatsappInstance && c?.whatsappToken) {
-          setWaStatus('connected')
+        if (c?.whatsappConnected) {
+          setWaFlow('connected')
+          setWaPhone(c?.whatsappPhone || null)
+        } else if (c?.whatsappInstance && c?.whatsappToken) {
+          setWaFlow('form')
         }
       }
       if (usersRes.ok) {
@@ -73,6 +126,7 @@ export default function ConfiguracoesPage() {
 
   useEffect(() => {
     loadData()
+    return () => stopPolling()
   }, [])
 
   async function handleSaveClinic() {
@@ -97,22 +151,42 @@ export default function ConfiguracoesPage() {
   async function handleConnectWhatsApp() {
     if (!waInstance || !waToken) return
     setWaConnecting(true)
-    setWaStatus('connecting')
     try {
       const res = await fetch('/api/clinica/whatsapp', {
-        method: 'PUT',
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ whatsappInstance: waInstance, whatsappToken: waToken }),
       })
       if (res.ok) {
-        setWaStatus('connected')
-      } else {
-        setWaStatus('disconnected')
+        const data = await res.json()
+        if (data.connected) {
+          setWaFlow('connected')
+          setWaPhone(data.phone)
+        } else {
+          // Saved, now show QR code
+          setWaFlow('qrcode')
+          await fetchQrCode()
+          startPolling()
+        }
       }
-    } catch {
-      setWaStatus('disconnected')
+    } catch (error) {
+      console.error('Erro ao conectar WhatsApp:', error)
     } finally {
       setWaConnecting(false)
+    }
+  }
+
+  async function handleDisconnectWhatsApp() {
+    try {
+      await fetch('/api/clinica/whatsapp', { method: 'DELETE' })
+      stopPolling()
+      setWaFlow('disconnected')
+      setWaPhone(null)
+      setWaQrCode(null)
+      setWaInstance('')
+      setWaToken('')
+    } catch (error) {
+      console.error('Erro ao desconectar:', error)
     }
   }
 
@@ -397,90 +471,173 @@ export default function ConfiguracoesPage() {
           <div className="max-w-2xl space-y-6">
             {/* WhatsApp via Z-API */}
             <div className="card">
-              <div className="flex items-start justify-between mb-4">
-                <div>
-                  <div className="flex items-center gap-3 mb-1">
-                    <div className="w-10 h-10 bg-green-100 rounded-xl flex items-center justify-center">
-                      <svg className="w-5 h-5 text-green-600" fill="currentColor" viewBox="0 0 24 24">
-                        <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
-                      </svg>
-                    </div>
-                    <div>
-                      <h3 className="font-bold text-slate-900">WhatsApp via Z-API</h3>
-                      <p className="text-slate-400 text-sm">Conecte seu WhatsApp Business</p>
-                    </div>
+              {/* Header */}
+              <div className="flex items-start justify-between mb-6">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-green-100 rounded-xl flex items-center justify-center flex-shrink-0">
+                    <svg className="w-5 h-5 text-green-600" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-slate-900">WhatsApp via Z-API</h3>
+                    <p className="text-slate-400 text-sm">Conecte seu WhatsApp Business</p>
                   </div>
                 </div>
                 <div className={`flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-full ${
-                  waStatus === 'connected' ? 'bg-green-100 text-green-700' :
-                  waStatus === 'connecting' ? 'bg-amber-100 text-amber-700' :
+                  waFlow === 'connected' ? 'bg-green-100 text-green-700' :
+                  waFlow === 'qrcode' ? 'bg-amber-100 text-amber-700' :
                   'bg-slate-100 text-slate-500'
                 }`}>
                   <span className={`w-1.5 h-1.5 rounded-full ${
-                    waStatus === 'connected' ? 'bg-green-500' :
-                    waStatus === 'connecting' ? 'bg-amber-500 animate-pulse' :
+                    waFlow === 'connected' ? 'bg-green-500' :
+                    waFlow === 'qrcode' ? 'bg-amber-500 animate-pulse' :
                     'bg-slate-400'
                   }`} />
-                  {waStatus === 'connected' ? 'Conectado' : waStatus === 'connecting' ? 'Conectando...' : 'Desconectado'}
+                  {waFlow === 'connected' ? 'Conectado' : waFlow === 'qrcode' ? 'Aguardando scan...' : 'Desconectado'}
                 </div>
               </div>
 
-              <div className="space-y-4">
-                <div>
-                  <label className="label">ID da Instância Z-API</label>
-                  <input
-                    type="text"
-                    value={waInstance}
-                    onChange={(e) => setWaInstance(e.target.value)}
-                    className="input"
-                    placeholder="Ex: 3CDB43A6..."
-                  />
-                </div>
-                <div>
-                  <label className="label">Token Z-API</label>
-                  <input
-                    type="password"
-                    value={waToken}
-                    onChange={(e) => setWaToken(e.target.value)}
-                    className="input"
-                    placeholder="Seu token de autenticação"
-                  />
-                </div>
+              {/* ESTADO: Formulário de credenciais */}
+              {(waFlow === 'disconnected' || waFlow === 'form') && (
+                <div className="space-y-4">
+                  <div>
+                    <label className="label">Instance ID</label>
+                    <input
+                      type="text"
+                      value={waInstance}
+                      onChange={(e) => setWaInstance(e.target.value)}
+                      className="input"
+                      placeholder="Ex: 3CDB43A6XXXXXXXXXXXXXXXX"
+                    />
+                  </div>
+                  <div>
+                    <label className="label">Token Z-API</label>
+                    <input
+                      type="password"
+                      value={waToken}
+                      onChange={(e) => setWaToken(e.target.value)}
+                      className="input"
+                      placeholder="Seu token de autenticação"
+                    />
+                  </div>
 
-                <button
-                  onClick={handleConnectWhatsApp}
-                  disabled={waConnecting || !waInstance || !waToken}
-                  className="btn-primary flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {waConnecting ? (
-                    <>
-                      <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                      </svg>
-                      Conectando...
-                    </>
-                  ) : (
-                    <>
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                      </svg>
-                      {waStatus === 'connected' ? 'Atualizar Conexão' : 'Conectar WhatsApp'}
-                    </>
-                  )}
-                </button>
+                  <button
+                    onClick={handleConnectWhatsApp}
+                    disabled={waConnecting || !waInstance || !waToken}
+                    className="btn-primary flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {waConnecting ? (
+                      <>
+                        <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                        Verificando...
+                      </>
+                    ) : (
+                      'Conectar WhatsApp'
+                    )}
+                  </button>
 
-                <div className="bg-blue-50 rounded-xl p-4">
-                  <p className="text-blue-700 text-sm font-medium mb-1">Como configurar:</p>
-                  <ol className="text-blue-600 text-xs space-y-1 list-decimal list-inside">
-                    <li>Acesse seu painel Z-API em z-api.io</li>
-                    <li>Crie ou selecione uma instância</li>
-                    <li>Copie o Instance ID e o Token</li>
-                    <li>Cole nos campos acima e clique em Conectar</li>
-                    <li>Configure o webhook para: /api/whatsapp/webhook</li>
-                  </ol>
+                  <p className="text-xs text-slate-400">
+                    Não tem conta?{' '}
+                    <span className="text-primary-600 font-medium">Crie em z-api.io</span>
+                  </p>
                 </div>
-              </div>
+              )}
+
+              {/* ESTADO: QR Code */}
+              {waFlow === 'qrcode' && (
+                <div className="text-center space-y-4">
+                  <p className="font-semibold text-slate-800">Escaneie o QR Code</p>
+
+                  <div className="flex items-center justify-center">
+                    {waQrLoading ? (
+                      <div className="w-56 h-56 bg-slate-100 rounded-2xl flex items-center justify-center animate-pulse">
+                        <svg className="w-8 h-8 text-slate-400 animate-spin" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                      </div>
+                    ) : waQrCode ? (
+                      <img
+                        src={waQrCode}
+                        alt="QR Code WhatsApp"
+                        className="w-56 h-56 rounded-2xl border-4 border-white shadow-medium"
+                      />
+                    ) : (
+                      <div className="w-56 h-56 bg-slate-100 rounded-2xl flex flex-col items-center justify-center gap-2">
+                        <p className="text-slate-400 text-sm">QR Code indisponível</p>
+                        <button onClick={fetchQrCode} className="text-xs text-primary-600 font-medium">
+                          Tentar novamente
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="bg-blue-50 rounded-xl p-4 text-left">
+                    <p className="text-blue-700 text-sm font-medium mb-1">Como escanear:</p>
+                    <ol className="text-blue-600 text-xs space-y-1 list-decimal list-inside">
+                      <li>Abra o WhatsApp no celular</li>
+                      <li>Toque em Aparelhos conectados</li>
+                      <li>Toque em Conectar aparelho</li>
+                      <li>Escaneie o QR Code acima</li>
+                    </ol>
+                  </div>
+
+                  <div className="flex items-center justify-center gap-2 text-amber-600 text-sm">
+                    <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    Aguardando conexão...
+                  </div>
+
+                  <button
+                    onClick={() => { stopPolling(); setWaFlow('form') }}
+                    className="text-xs text-slate-400 hover:text-slate-600"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              )}
+
+              {/* ESTADO: Conectado */}
+              {waFlow === 'connected' && (
+                <div className="space-y-4">
+                  <div className="bg-green-50 rounded-xl p-4 flex items-start gap-3">
+                    <div className="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center flex-shrink-0">
+                      <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="font-semibold text-green-800 text-sm">WhatsApp Conectado</p>
+                      {waPhone && (
+                        <p className="text-green-700 text-xs mt-0.5">Número: {waPhone}</p>
+                      )}
+                      {waInstance && (
+                        <p className="text-green-600 text-xs mt-0.5 font-mono">Instance: {waInstance}</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 text-xs text-slate-500">
+                    <svg className="w-3.5 h-3.5 text-green-500" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                    </svg>
+                    Webhook registrado automaticamente
+                  </div>
+
+                  <button
+                    onClick={handleDisconnectWhatsApp}
+                    className="text-sm text-red-600 hover:text-red-700 font-medium px-4 py-2 border border-red-200 rounded-xl hover:bg-red-50 transition-colors"
+                  >
+                    Desconectar WhatsApp
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         )}
