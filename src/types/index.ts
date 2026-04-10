@@ -49,6 +49,7 @@ export interface Contact {
   messages?: Message[]
   sessions?: Session[]
   createdAt: Date
+  updatedAt?: Date
 }
 
 export interface AgentFaq {
@@ -133,6 +134,8 @@ export interface DashboardMetrics {
   leadsFriosAlerta: number
   taxaConversao: number
   atividadesRecentes: AtividadeRecente[]
+  escaladas: EscaladaItem[]
+  agentActivity: AgentActivityItem[]
 }
 
 export interface AtividadeRecente {
@@ -143,6 +146,32 @@ export interface AtividadeRecente {
   conteudo: string
   timestamp: Date
   status?: string
+}
+
+export interface EscaladaItem {
+  id: string
+  name: string
+  phone: string
+  label: ContactLabel
+  escalateSummary: {
+    intencao: string
+    perfil: string
+    duvida: string
+    motivoEscalada: string
+  } | null
+  updatedAt: Date
+}
+
+export interface AgentActivityItem {
+  id: string
+  content: string
+  createdAt: Date
+  contact: {
+    id: string
+    name: string
+    label: ContactLabel
+    humanTakeover: boolean
+  }
 }
 
 // Contact with last message for inbox

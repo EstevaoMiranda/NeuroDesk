@@ -13,6 +13,8 @@ export async function GET(req: Request) {
     const sevenDaysAgo = new Date()
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
 
+    const last24h = new Date(Date.now() - 24 * 60 * 60 * 1000)
+
     const [
       novosContatos,
       visitasAgendadas,
@@ -21,6 +23,8 @@ export async function GET(req: Request) {
       leadsFriosAll,
       recentMessages,
       recentSessions,
+      escaladas,
+      agentActivity,
     ] = await Promise.all([
       // Total NEW label
       prisma.contact.count({ where: { clinicId, label: 'NEW' } }),
@@ -65,12 +69,52 @@ export async function GET(req: Request) {
         orderBy: { scheduledAt: 'desc' },
         take: 5,
       }),
+
+      // Contacts awaiting human takeover (oldest first = waiting longest)
+      prisma.contact.findMany({
+        where: { clinicId, humanTakeover: true },
+        orderBy: { updatedAt: 'asc' },
+        select: {
+          id:              true,
+          name:            true,
+          phone:           true,
+          label:           true,
+          escalateSummary: true,
+          updatedAt:       true,
+        },
+      }),
+
+      // Agent outbound activity in last 24h (one per contact, latest first)
+      prisma.message.findMany({
+        where: {
+          clinicId,
+          direction: 'OUTBOUND',
+          channel:   'WHATSAPP',
+          createdAt: { gte: last24h },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 20,
+        select: {
+          id:        true,
+          content:   true,
+          createdAt: true,
+          contact: {
+            select: {
+              id:            true,
+              name:          true,
+              label:         true,
+              humanTakeover: true,
+            },
+          },
+        },
+        distinct: ['contactId'],
+      }),
     ])
 
     // Leads Frios with last message > 7 days ago
     const leadsFriosAlerta = leadsFriosAll.filter((c) => {
       const lastMsg = c.messages[0]
-      if (!lastMsg) return true // no messages = cold
+      if (!lastMsg) return true
       const diffDays = Math.floor(
         (Date.now() - new Date(lastMsg.createdAt).getTime()) / (1000 * 60 * 60 * 24)
       )
@@ -104,12 +148,19 @@ export async function GET(req: Request) {
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
       .slice(0, 10)
 
+    // Only show agent activity where agent resolved without escalation
+    const agentActivityFiltered = agentActivity
+      .filter((m) => !m.contact.humanTakeover)
+      .slice(0, 10)
+
     return NextResponse.json({
       novosContatos,
       visitasAgendadas,
       leadsFriosAlerta,
       taxaConversao,
       atividadesRecentes,
+      escaladas,
+      agentActivity: agentActivityFiltered,
     })
   } catch (error) {
     console.error('GET /dashboard/metrics error:', error)
