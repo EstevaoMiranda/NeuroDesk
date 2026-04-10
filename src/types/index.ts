@@ -43,9 +43,33 @@ export interface Contact {
   assignedToId?: string | null
   assignedTo?: User | null
   notes?: string | null
+  humanTakeover?: boolean
+  escalateSummary?: Record<string, string> | null
+  agentActive?: boolean
   messages?: Message[]
   sessions?: Session[]
   createdAt: Date
+}
+
+export interface AgentFaq {
+  q: string
+  a: string
+}
+
+export interface AgentConfig {
+  id: string
+  clinicId: string
+  agentName: string
+  agentTone: string
+  agentIntro: string
+  clinicHours?: string | null
+  clinicAddress?: string | null
+  specialties: string[]
+  faqs: AgentFaq[]
+  escalateRules: string[]
+  active: boolean
+  createdAt: Date
+  updatedAt: Date
 }
 
 export interface Message {

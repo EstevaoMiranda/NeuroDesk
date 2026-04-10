@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { transcribeAudio } from '@/lib/zapi'
+import { transcribeAudio, sendTextMessage } from '@/lib/zapi'
 import type { ContactLabel } from '@/types'
 
 interface ZApiWebhookPayload {
@@ -188,6 +188,76 @@ export async function POST(req: Request) {
         read: false,
       },
     })
+
+    // ── AGENT IA ──────────────────────────────────────────────────────────
+    try {
+      // Check if agent is configured and active for this clinic
+      const agentConfig = await prisma.agentConfig.findUnique({
+        where: { clinicId: clinic.id },
+        select: { active: true },
+      })
+
+      if (agentConfig?.active) {
+        // Get last 20 messages for conversation history
+        const history = await prisma.message.findMany({
+          where:   { contactId: contact.id, clinicId: clinic.id },
+          orderBy: { createdAt: 'asc' },
+          take:    20,
+        })
+
+        const conversationHistory = history.map((m) => ({
+          role:    m.direction === 'INBOUND' ? ('user' as const) : ('assistant' as const),
+          content: m.content,
+        }))
+
+        // Use text content for agent (stripped audio/media labels)
+        const agentMessage = isAudio ? (content.replace(/^\[Áudio[^\]]*\]\s*/, '') || content) : content
+
+        const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
+        const agentRes = await fetch(`${baseUrl}/api/agent/chat`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({
+            clinicId:            clinic.id,
+            contactId:           contact.id,
+            message:             agentMessage,
+            conversationHistory: conversationHistory.slice(0, -1), // exclude the message we just added
+          }),
+        })
+
+        if (agentRes.ok) {
+          const agentData = await agentRes.json()
+
+          if (!agentData.skip && agentData.reply) {
+            // Save agent reply as OUTBOUND message
+            await prisma.message.create({
+              data: {
+                contactId:  contact.id,
+                clinicId:   clinic.id,
+                direction:  'OUTBOUND',
+                channel:    'WHATSAPP',
+                content:    agentData.reply,
+                read:       true,
+              },
+            })
+
+            // Send via Z-API
+            if (clinic.whatsappInstance && clinic.whatsappToken) {
+              await sendTextMessage(
+                clinic.whatsappInstance,
+                clinic.whatsappToken,
+                phone,
+                agentData.reply,
+              )
+            }
+          }
+        }
+      }
+    } catch (agentError) {
+      // Agent errors must not break the webhook — just log
+      console.error('Agent error in webhook:', agentError)
+    }
+    // ─────────────────────────────────────────────────────────────────────
 
     return NextResponse.json({ received: true, messageId: message.id, isAudio })
   } catch (error) {
