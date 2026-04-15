@@ -46,6 +46,11 @@ export interface Contact {
   humanTakeover?: boolean
   escalateSummary?: Record<string, string> | null
   agentActive?: boolean
+  resumeUrl?: string | null
+  resumeSummary?: string | null
+  rejectionReason?: string | null
+  rejectionCount?: number
+  candidateStatus?: string | null
   messages?: Message[]
   sessions?: Session[]
   createdAt: Date

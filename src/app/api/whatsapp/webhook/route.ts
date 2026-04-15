@@ -114,6 +114,9 @@ export async function POST(req: Request) {
     // Determine message content based on type
     let content: string | null = null
     let isAudio = false
+    let isPdfCurriculum = false
+    let pdfDocumentUrl: string | null = null
+    let pdfFileName: string | null = null
 
     if (body.audio?.audioUrl) {
       isAudio = true
@@ -136,8 +139,15 @@ export async function POST(req: Request) {
       }
     } else if (body.image?.imageUrl) {
       content = body.image.caption ? `[Imagem] ${body.image.caption}` : '[Imagem]'
-    } else if (body.document?.fileName) {
-      content = `[Documento] ${body.document.fileName}`
+    } else if (body.document?.documentUrl) {
+      const fileName = body.document.fileName || 'documento'
+      content = `[Documento] ${fileName}`
+      // Detect PDF that may be a curriculum
+      if (fileName.toLowerCase().endsWith('.pdf')) {
+        isPdfCurriculum = true
+        pdfDocumentUrl = body.document.documentUrl
+        pdfFileName = fileName
+      }
     } else {
       content = extractTextContent(body)
     }
@@ -150,6 +160,15 @@ export async function POST(req: Request) {
     let initialLabel: ContactLabel = 'NEW'
     if (body.labels && body.labels.length > 0) {
       initialLabel = mapZApiLabelToContactLabel(body.labels[0])
+    }
+
+    // Detect curriculum keywords in plain text and override label
+    const CURRICULUM_KEYWORDS = ['currículo', 'curriculo', 'curriculum', 'cv ', ' cv', 'portfólio', 'portfolio', 'vaga', 'emprego', 'contratação', 'contratacao']
+    if (!isPdfCurriculum && content) {
+      const lower = content.toLowerCase()
+      if (CURRICULUM_KEYWORDS.some((kw) => lower.includes(kw))) {
+        initialLabel = 'CURRICULO'
+      }
     }
 
     // Find or create contact
@@ -188,6 +207,31 @@ export async function POST(req: Request) {
         read: false,
       },
     })
+
+    // ── CURRÍCULO PDF PROCESSING ──────────────────────────────────────────
+    if (isPdfCurriculum && pdfDocumentUrl) {
+      try {
+        const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
+        // Fire-and-forget (no await) so webhook returns quickly
+        fetch(`${baseUrl}/api/curriculos/process`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          // Use a system token — build a minimal JWT from env or call internally
+          // We pass clinicId + contactId; the route will be called server-side
+          // Since it requires auth, we use an internal header instead
+          body: JSON.stringify({
+            _internal: true,
+            clinicId: clinic.id,
+            contactId: contact.id,
+            documentUrl: pdfDocumentUrl,
+            fileName: pdfFileName,
+          }),
+        }).catch((e) => console.error('Curriculum process fetch error:', e))
+      } catch (e) {
+        console.error('Curriculum process trigger error:', e)
+      }
+    }
+    // ──────────────────────────────────────────────────────────────────────
 
     // ── AGENT IA ──────────────────────────────────────────────────────────
     try {

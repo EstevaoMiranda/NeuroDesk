@@ -128,6 +128,11 @@ model Contact {
   humanTakeover   Boolean       @default(false)
   escalateSummary Json?
   agentActive     Boolean       @default(true)
+  resumeUrl       String?
+  resumeSummary   String?       @db.Text
+  rejectionReason String?       @db.Text
+  rejectionCount  Int           @default(0)
+  candidateStatus String?
   messages        Message[]
   sessions        Session[]
   createdAt       DateTime      @default(now())
