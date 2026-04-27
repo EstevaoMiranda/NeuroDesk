@@ -1,591 +1,416 @@
 'use client'
 
-import { useEffect, useState, useRef, useCallback } from 'react'
-import Topbar from '@/components/layout/Topbar'
-import type { Contact, Message, ContactLabel } from '@/types'
-import {
-  getInitials,
-  timeAgo,
-  formatDateTime,
-  getLabelText,
-  getLabelBgColor,
-  getLabelHex,
-  daysSince,
-} from '@/lib/utils'
+import { useState, useEffect, useRef } from 'react'
+import type { WaConversation, WaLabel, WaMessage } from '@/lib/mock/inboxData'
+import { conversations as initialConversations } from '@/lib/mock/inboxData'
 
-function isAudioMessage(content: string): boolean {
-  return content.startsWith('[Áudio') || content.startsWith('[Audio')
+const LABEL_STYLES: Record<WaLabel, string> = {
+  CLIENTE:      'bg-[#00a884] text-[#111b21]',
+  LEAD:         'bg-[#4F5FE0] text-white',
+  NEW:          'bg-[#E09B10] text-white',
+  PROFISSIONAL: 'bg-[#7B5FE0] text-white',
+  CURRICULO:    'bg-[#D94040] text-white',
+  LEAD_FRIO:    'bg-[#3B82F6] text-white',
+  VISITA:       'bg-[#F59E0B] text-[#111b21]',
 }
 
-function parseAudioContent(content: string): { duration?: string; transcription?: string } {
-  // [Áudio 32s] Bom dia, gostaria de saber...
-  // [Áudio]
-  const match = content.match(/^\[Áudio(?:\s+(\d+)s)?\](?:\s+(.+))?$/)
-  if (match) {
-    return { duration: match[1], transcription: match[2] }
-  }
-  return { transcription: content.replace(/^\[Áudio[^\]]*\]\s*/, '') }
+const LABEL_TEXT: Record<WaLabel, string> = {
+  CLIENTE:      'Cliente',
+  LEAD:         'Lead',
+  NEW:          'Novo',
+  PROFISSIONAL: 'Profissional',
+  CURRICULO:    'Currículo',
+  LEAD_FRIO:    'Lead Frio',
+  VISITA:       'Visita',
 }
 
-interface ConversationItem {
-  contact: Contact
-  messages: Message[]
-  unreadCount: number
-  lastMessage: Message | null
-}
+type FilterTab = 'ALL' | WaLabel
 
-type TabLabel = 'ALL' | ContactLabel
-
-const TABS: { id: TabLabel; emoji: string; label: string }[] = [
-  { id: 'ALL',        emoji: '💬', label: 'Todos' },
-  { id: 'NEW',        emoji: '🆕', label: 'Novos' },
-  { id: 'VISITA',     emoji: '🟡', label: 'Visitas Marcadas' },
-  { id: 'LEAD_FRIO',  emoji: '🔵', label: 'Leads Frios' },
-  { id: 'CLIENTE',    emoji: '🟢', label: 'Clientes' },
-  { id: 'PROFISSIONAL', emoji: '👤', label: 'Profissionais' },
-  { id: 'CURRICULO',  emoji: '📄', label: 'Currículos' },
+const FILTER_TABS: { id: FilterTab; label: string }[] = [
+  { id: 'ALL',     label: 'Todos' },
+  { id: 'CLIENTE', label: 'Clientes' },
+  { id: 'LEAD',    label: 'Leads' },
+  { id: 'NEW',     label: 'Novos' },
 ]
 
-const QUICK_REPLIES: Record<ContactLabel | 'ALL', string[]> = {
-  ALL: ['Olá! Como posso ajudar?', 'Aguarde um momento.'],
-  NEW: [
-    'Olá! Seja bem-vindo à Terap Moviment 👋',
-    'Como posso te ajudar?',
-    'Poderia me contar mais sobre sua necessidade?',
-  ],
-  VISITA: [
-    'Confirmando sua visita 😊 Você virá no horário combinado?',
-    'Precisamos reagendar sua visita?',
-    'Lembrando que sua visita está agendada para amanhã!',
-  ],
-  LEAD_FRIO: [
-    'Olá! Tudo bem? Ainda tem interesse em conhecer a clínica?',
-    'Oi! Passando para retomar contato. Posso ajudar com algo?',
-    'Temos novidades que podem te interessar! Posso apresentar?',
-  ],
-  CLIENTE: [
-    'Olá! Como posso ajudar?',
-    'Vou verificar com a equipe e retorno em breve!',
-    'Tudo certo! Pode deixar que resolvo.',
-  ],
-  PROFISSIONAL: [
-    'Olá! Como posso ajudar?',
-    'Vou verificar com nossa equipe.',
-    'Pode encaminhar os dados do paciente.',
-  ],
-  CURRICULO: [
-    'Olá! Recebemos seu currículo com interesse.',
-    'Nossa equipe irá analisar e entraremos em contato.',
-    'Obrigado pelo interesse em fazer parte da nossa equipe!',
-  ],
-}
-
-const ACTION_BUTTONS: Record<ContactLabel, { label: string; targetLabel: ContactLabel; color: string }[]> = {
-  NEW: [
-    { label: 'Marcar como Lead Frio', targetLabel: 'LEAD_FRIO', color: 'bg-blue-100 text-blue-700 hover:bg-blue-200' },
-    { label: 'Agendar Visita',        targetLabel: 'VISITA',    color: 'bg-amber-100 text-amber-700 hover:bg-amber-200' },
-  ],
-  LEAD_FRIO: [
-    { label: 'Agendar Visita',        targetLabel: 'VISITA',    color: 'bg-amber-100 text-amber-700 hover:bg-amber-200' },
-  ],
-  VISITA: [
-    { label: 'Converteu para Cliente', targetLabel: 'CLIENTE',  color: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' },
-  ],
-  CLIENTE: [],
-  PROFISSIONAL: [],
-  CURRICULO: [],
-}
-
 export default function InboxPage() {
-  const [conversations, setConversations] = useState<ConversationItem[]>([])
-  const [selectedConversation, setSelectedConversation] = useState<ConversationItem | null>(null)
-  const [activeTab, setActiveTab] = useState<TabLabel>('ALL')
-  const [loading, setLoading] = useState(true)
-  const [sendingMessage, setSendingMessage] = useState(false)
-  const [newMessage, setNewMessage] = useState('')
-  const [updatingLabel, setUpdatingLabel] = useState(false)
-  const [waConnected, setWaConnected] = useState<boolean | null>(null)
-  const messagesEndRef = useRef<HTMLDivElement>(null)
-  const selectedContactIdRef = useRef<string | null>(null)
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [convs, setConvs]           = useState<WaConversation[]>(initialConversations)
+  const [selected, setSelected]     = useState<WaConversation | null>(null)
+  const [filter, setFilter]         = useState<FilterTab>('ALL')
+  const [search, setSearch]         = useState('')
+  const [message, setMessage]       = useState('')
+  const messagesEndRef              = useRef<HTMLDivElement>(null)
 
-  async function loadConversations(silent = false) {
-    try {
-      const res = await fetch('/api/mensagens')
-      if (res.ok) {
-        const data = await res.json()
-        const newConvs: ConversationItem[] = data.conversations || []
-        setConversations(newConvs)
-
-        // If a conversation is selected, refresh its messages
-        if (selectedContactIdRef.current) {
-          const updated = newConvs.find((c) => c.contact.id === selectedContactIdRef.current)
-          if (updated) {
-            setSelectedConversation((prev) => {
-              if (!prev) return updated
-              // Only update if there are new messages
-              if (updated.messages.length > prev.messages.length) {
-                return { ...updated, unreadCount: 0 }
-              }
-              return prev
-            })
-          }
-        }
-      }
-    } catch (error) {
-      if (!silent) console.error('Erro ao carregar conversas:', error)
-    } finally {
-      if (!silent) setLoading(false)
-    }
-  }
-
-  async function checkWaStatus() {
-    try {
-      const res = await fetch('/api/clinica/whatsapp/status')
-      if (res.ok) {
-        const data = await res.json()
-        setWaConnected(data.connected === true)
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  async function selectConversation(conv: ConversationItem) {
-    selectedContactIdRef.current = conv.contact.id
-    setSelectedConversation(conv)
-    if (conv.unreadCount > 0) {
-      setConversations((prev) =>
-        prev.map((c) =>
-          c.contact.id === conv.contact.id
-            ? { ...c, unreadCount: 0, messages: c.messages.map((m) => ({ ...m, read: true })) }
-            : c
-        )
-      )
-      setSelectedConversation({ ...conv, unreadCount: 0 })
-    }
-  }
-
-  async function handleSendMessage() {
-    if (!newMessage.trim() || !selectedConversation || sendingMessage) return
-
-    setSendingMessage(true)
-    const content = newMessage.trim()
-    setNewMessage('')
-
-    try {
-      const res = await fetch('/api/mensagens', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contactId: selectedConversation.contact.id,
-          content,
-        }),
-      })
-
-      if (res.ok) {
-        const data = await res.json()
-        const newMsg: Message = data.message
-
-        setSelectedConversation((prev) => {
-          if (!prev) return prev
-          return { ...prev, messages: [...prev.messages, newMsg], lastMessage: newMsg }
-        })
-        setConversations((prev) =>
-          prev.map((c) =>
-            c.contact.id === selectedConversation.contact.id
-              ? { ...c, messages: [...c.messages, newMsg], lastMessage: newMsg }
-              : c
-          )
-        )
-      }
-    } catch (error) {
-      console.error('Erro ao enviar mensagem:', error)
-    } finally {
-      setSendingMessage(false)
-    }
-  }
-
-  async function handleUpdateLabel(contactId: string, newLabel: ContactLabel) {
-    setUpdatingLabel(true)
-    try {
-      const res = await fetch(`/api/contatos/${contactId}/label`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ label: newLabel }),
-      })
-
-      if (res.ok) {
-        // Update local state
-        const updatedContact = { ...selectedConversation!.contact, label: newLabel }
-        const updatedConv = { ...selectedConversation!, contact: updatedContact }
-        setSelectedConversation(updatedConv)
-        setConversations((prev) =>
-          prev.map((c) =>
-            c.contact.id === contactId
-              ? { ...c, contact: { ...c.contact, label: newLabel } }
-              : c
-          )
-        )
-      }
-    } catch (error) {
-      console.error('Erro ao atualizar etiqueta:', error)
-    } finally {
-      setUpdatingLabel(false)
-    }
-  }
-
-  useEffect(() => {
-    loadConversations()
-    checkWaStatus()
-    // Poll for new messages every 5 seconds
-    pollingRef.current = setInterval(() => loadConversations(true), 5000)
-    return () => {
-      if (pollingRef.current) clearInterval(pollingRef.current)
-    }
-  }, [])
+  const filtered = convs.filter((c) => {
+    const matchesTab    = filter === 'ALL' || c.label === filter
+    const matchesSearch = search === '' || c.name.toLowerCase().includes(search.toLowerCase())
+    return matchesTab && matchesSearch
+  })
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [selectedConversation?.messages])
+  }, [selected?.messages.length])
 
-  const filteredConversations = conversations.filter((conv) =>
-    activeTab === 'ALL' ? true : conv.contact.label === activeTab
-  )
+  function selectConv(conv: WaConversation) {
+    setConvs((prev) =>
+      prev.map((c) => c.id === conv.id ? { ...c, unreadCount: 0 } : c)
+    )
+    setSelected({ ...conv, unreadCount: 0 })
+  }
 
-  const tabCounts = useCallback(
-    (tab: TabLabel) => {
-      if (tab === 'ALL') return conversations.reduce((s, c) => s + c.unreadCount, 0)
-      return conversations
-        .filter((c) => c.contact.label === tab)
-        .reduce((s, c) => s + c.unreadCount, 0)
-    },
-    [conversations]
-  )
+  function sendMessage() {
+    if (!message.trim() || !selected) return
+    const now = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+    const newMsg: WaMessage = { id: `m${Date.now()}`, type: 'out', text: message.trim(), time: now }
 
-  const tabTotals = useCallback(
-    (tab: TabLabel) => {
-      if (tab === 'ALL') return conversations.length
-      return conversations.filter((c) => c.contact.label === tab).length
-    },
-    [conversations]
-  )
+    setConvs((prev) =>
+      prev.map((c) => c.id === selected.id
+        ? { ...c, messages: [...c.messages, newMsg], preview: message.trim(), time: now }
+        : c
+      )
+    )
+    setSelected((prev) => prev ? { ...prev, messages: [...prev.messages, newMsg] } : null)
+    setMessage('')
+  }
 
-  const currentLabel = selectedConversation?.contact.label ?? 'NEW'
-  const quickReplies = QUICK_REPLIES[currentLabel] || QUICK_REPLIES.ALL
-  const actionButtons = ACTION_BUTTONS[currentLabel] || []
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      sendMessage()
+    }
+  }
+
+  const totalUnread = convs.reduce((sum, c) => sum + c.unreadCount, 0)
 
   return (
-    <div className="flex flex-col h-screen">
-      <Topbar title="Inbox" />
-
-      <div className="flex flex-1 overflow-hidden">
-        {/* ── LEFT PANEL ────────────────────────────────── */}
-        <div className="w-80 flex-shrink-0 border-r border-slate-200 bg-white flex flex-col">
-
-          {/* WhatsApp status indicator */}
-          {waConnected !== null && (
-            <div className={`flex items-center gap-1.5 px-4 py-2 text-xs font-medium border-b ${
-              waConnected ? 'bg-green-50 text-green-700 border-green-100' : 'bg-amber-50 text-amber-700 border-amber-100'
-            }`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${waConnected ? 'bg-green-500' : 'bg-amber-400 animate-pulse'}`} />
-              {waConnected ? 'WhatsApp conectado' : 'WhatsApp desconectado'}
+    <div
+      className="flex h-full overflow-hidden"
+      style={{ background: '#111b21' }}
+    >
+      {/* ── Col 1: Left panel (search + tabs + conversation list) ──────── */}
+      <div
+        className="w-[300px] flex-shrink-0 flex flex-col border-r"
+        style={{ borderColor: '#1f2c34', background: '#111b21' }}
+      >
+        {/* Header */}
+        <div
+          className="flex items-center justify-between px-4 py-3 flex-shrink-0"
+          style={{ background: '#202c33' }}
+        >
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-full bg-[#4F5FE0] flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
+              N
             </div>
-          )}
-
-          {/* Tab bar */}
-          <div className="border-b border-slate-100 overflow-x-auto">
-            <div className="flex min-w-max">
-              {TABS.map((tab) => {
-                const unread = tabCounts(tab.id)
-                const isActive = activeTab === tab.id
-                return (
-                  <button
-                    key={tab.id}
-                    onClick={() => setActiveTab(tab.id)}
-                    className={`flex items-center gap-1.5 px-3 py-3 text-xs font-medium whitespace-nowrap border-b-2 transition-colors ${
-                      isActive
-                        ? 'border-primary-500 text-primary-600'
-                        : 'border-transparent text-slate-500 hover:text-slate-700'
-                    }`}
-                  >
-                    <span>{tab.emoji}</span>
-                    <span>{tab.label}</span>
-                    {unread > 0 && (
-                      <span className="bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none">
-                        {unread}
-                      </span>
-                    )}
-                    {unread === 0 && tabTotals(tab.id) > 0 && (
-                      <span className="bg-slate-100 text-slate-500 text-[10px] px-1.5 py-0.5 rounded-full leading-none">
-                        {tabTotals(tab.id)}
-                      </span>
-                    )}
-                  </button>
-                )
-              })}
-            </div>
+            <span className="text-[#e9edef] font-semibold text-sm">NeuroDesk</span>
           </div>
-
-          {/* Conversation list */}
-          <div className="flex-1 overflow-y-auto">
-            {loading ? (
-              <div className="p-4 space-y-3">
-                {[1, 2, 3, 4].map((i) => (
-                  <div key={i} className="flex items-start gap-3 animate-pulse p-3">
-                    <div className="w-10 h-10 bg-slate-200 rounded-xl flex-shrink-0" />
-                    <div className="flex-1 space-y-2">
-                      <div className="h-4 bg-slate-200 rounded w-3/4" />
-                      <div className="h-3 bg-slate-200 rounded w-full" />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : filteredConversations.length === 0 ? (
-              <div className="p-8 text-center text-slate-400">
-                <svg className="w-12 h-12 mx-auto mb-3 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 3H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z" />
-                </svg>
-                <p className="text-sm">Nenhuma conversa nesta aba</p>
-              </div>
-            ) : (
-              filteredConversations.map((conv) => {
-                const isSelected = selectedConversation?.contact.id === conv.contact.id
-                const days = conv.lastMessage ? daysSince(conv.lastMessage.createdAt) : null
-                const isLeadFrioAtrasado = conv.contact.label === 'LEAD_FRIO' && days !== null && days > 7
-
-                return (
-                  <button
-                    key={conv.contact.id}
-                    onClick={() => selectConversation(conv)}
-                    className={`w-full px-4 py-3 flex items-start gap-3 text-left border-b border-slate-50 transition-colors ${
-                      isSelected
-                        ? 'bg-primary-50 border-l-2 border-l-primary-500'
-                        : 'hover:bg-slate-50'
-                    }`}
-                  >
-                    {/* Avatar */}
-                    <div className="relative flex-shrink-0">
-                      <div
-                        className="w-10 h-10 rounded-xl flex items-center justify-center text-white text-sm font-bold"
-                        style={{ backgroundColor: getLabelHex(conv.contact.label) }}
-                      >
-                        {getInitials(conv.contact.name)}
-                      </div>
-                      {conv.unreadCount > 0 && (
-                        <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold w-4 h-4 rounded-full flex items-center justify-center">
-                          {conv.unreadCount > 9 ? '9+' : conv.unreadCount}
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Info */}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between gap-1">
-                        <p className={`text-sm truncate ${conv.unreadCount > 0 ? 'font-bold text-slate-900' : 'font-medium text-slate-700'}`}>
-                          {conv.contact.name}
-                        </p>
-                        <p className="text-[11px] text-slate-400 flex-shrink-0">
-                          {conv.lastMessage ? timeAgo(conv.lastMessage.createdAt) : ''}
-                        </p>
-                      </div>
-
-                      {/* Label badge */}
-                      <span className={`inline-block text-[10px] font-medium px-1.5 py-0.5 rounded-full mt-0.5 ${getLabelBgColor(conv.contact.label)}`}>
-                        {getLabelText(conv.contact.label)}
-                      </span>
-
-                      {/* Last message preview */}
-                      {conv.lastMessage && (
-                        <p className={`text-xs truncate mt-0.5 ${conv.unreadCount > 0 ? 'text-slate-700 font-medium' : 'text-slate-400'}`}>
-                          {conv.lastMessage.direction === 'OUTBOUND' ? 'Você: ' : ''}
-                          {conv.lastMessage.content}
-                        </p>
-                      )}
-
-                      {/* Alert indicators */}
-                      {isLeadFrioAtrasado && (
-                        <p className="text-[11px] text-red-500 font-medium mt-0.5">
-                          ⚠ Sem resposta há {days} dias
-                        </p>
-                      )}
-                    </div>
-                  </button>
-                )
-              })
+          <div className="flex items-center gap-2">
+            {totalUnread > 0 && (
+              <span className="bg-[#00a884] text-[#111b21] text-xs font-bold px-1.5 py-0.5 rounded-full min-w-[20px] text-center">
+                {totalUnread}
+              </span>
             )}
+            <button className="p-1.5 rounded-full hover:bg-white/10 transition-colors">
+              <svg className="w-5 h-5 text-[#8696a0]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+              </svg>
+            </button>
           </div>
         </div>
 
-        {/* ── RIGHT PANEL / CHAT ────────────────────────── */}
-        <div className="flex-1 flex flex-col bg-slate-50 min-w-0">
-          {selectedConversation ? (
-            <>
-              {/* Chat header */}
-              <div className="bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div
-                    className="w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold flex-shrink-0"
-                    style={{ backgroundColor: getLabelHex(selectedConversation.contact.label) }}
-                  >
-                    {getInitials(selectedConversation.contact.name)}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="font-bold text-slate-900 truncate">{selectedConversation.contact.name}</p>
-                    <div className="flex items-center gap-2">
-                      <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${getLabelBgColor(selectedConversation.contact.label)}`}>
-                        {getLabelText(selectedConversation.contact.label)}
-                      </span>
-                      <span className="text-xs text-slate-400">{selectedConversation.contact.phone}</span>
-                    </div>
-                  </div>
-                </div>
+        {/* Search */}
+        <div className="px-3 py-2 flex-shrink-0" style={{ background: '#202c33' }}>
+          <div className="relative">
+            <svg className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#8696a0]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+            <input
+              type="text"
+              placeholder="Pesquisar..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full pl-9 pr-3 py-1.5 text-sm rounded-lg outline-none placeholder-[#8696a0] text-[#e9edef]"
+              style={{ background: '#2a3942' }}
+            />
+          </div>
+        </div>
 
-                {/* Right side: label dropdown + action buttons */}
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  {/* Manual label change dropdown */}
-                  <select
-                    value={selectedConversation.contact.label}
-                    onChange={(e) => handleUpdateLabel(selectedConversation.contact.id, e.target.value as ContactLabel)}
-                    disabled={updatingLabel}
-                    className="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-primary-400 disabled:opacity-50"
-                  >
-                    <option value="NEW">🆕 Novo</option>
-                    <option value="VISITA">🟡 Visita Marcada</option>
-                    <option value="LEAD_FRIO">🔵 Lead Frio</option>
-                    <option value="CLIENTE">🟢 Cliente</option>
-                    <option value="PROFISSIONAL">👤 Profissional</option>
-                    <option value="CURRICULO">📄 Currículo</option>
-                  </select>
+        {/* Filter tabs */}
+        <div className="flex border-b flex-shrink-0" style={{ borderColor: '#1f2c34', background: '#202c33' }}>
+          {FILTER_TABS.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setFilter(tab.id)}
+              className="flex-1 py-2 text-xs font-medium transition-colors border-b-2"
+              style={{
+                color: filter === tab.id ? '#00a884' : '#8696a0',
+                borderColor: filter === tab.id ? '#00a884' : 'transparent',
+              }}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
 
-                  {/* Contextual action buttons */}
-                  {actionButtons.map((btn) => (
-                    <button
-                      key={btn.targetLabel}
-                      onClick={() => handleUpdateLabel(selectedConversation.contact.id, btn.targetLabel)}
-                      disabled={updatingLabel}
-                      className={`text-xs font-medium px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 ${btn.color}`}
-                    >
-                      {btn.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Messages area */}
-              <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                {selectedConversation.messages.map((msg) => {
-                  const audio = isAudioMessage(msg.content)
-                  const audioData = audio ? parseAudioContent(msg.content) : null
-                  return (
-                    <div
-                      key={msg.id}
-                      className={`flex ${msg.direction === 'OUTBOUND' ? 'justify-end' : 'justify-start'}`}
-                    >
-                      <div
-                        className={`max-w-xs lg:max-w-md xl:max-w-lg px-4 py-2.5 rounded-2xl text-sm ${
-                          msg.direction === 'OUTBOUND'
-                            ? 'bg-primary-600 text-white rounded-br-md'
-                            : 'bg-white text-slate-800 shadow-sm rounded-bl-md'
-                        }`}
-                      >
-                        {audio && audioData ? (
-                          <div>
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="text-base">🎵</span>
-                              <span className="font-medium">
-                                Áudio{audioData.duration ? ` (${audioData.duration}s)` : ''}
-                              </span>
-                            </div>
-                            {audioData.transcription && (
-                              <p className={`text-xs leading-relaxed mt-1 ${
-                                msg.direction === 'OUTBOUND' ? 'text-primary-100' : 'text-slate-500'
-                              }`}>
-                                Transcrição: &ldquo;{audioData.transcription}&rdquo;
-                              </p>
-                            )}
-                          </div>
-                        ) : (
-                          <p className="leading-relaxed">{msg.content}</p>
-                        )}
-                        <p className={`text-xs mt-1 ${msg.direction === 'OUTBOUND' ? 'text-primary-200' : 'text-slate-400'}`}>
-                          {formatDateTime(msg.createdAt)}
-                          {msg.direction === 'OUTBOUND' && (
-                            <span className="ml-1">{msg.read ? '✓✓' : '✓'}</span>
-                          )}
-                        </p>
-                      </div>
-                    </div>
-                  )
-                })}
-                <div ref={messagesEndRef} />
-              </div>
-
-              {/* Quick replies */}
-              <div className="px-4 pb-2 flex gap-2 overflow-x-auto">
-                {quickReplies.map((reply) => (
-                  <button
-                    key={reply}
-                    onClick={() => setNewMessage(reply)}
-                    className="flex-shrink-0 text-xs bg-white border border-slate-200 text-slate-600 px-3 py-1.5 rounded-full hover:border-primary-400 hover:text-primary-600 transition-colors"
-                  >
-                    {reply}
-                  </button>
-                ))}
-              </div>
-
-              {/* Message input */}
-              <div className="bg-white border-t border-slate-200 p-4">
-                <div className="flex items-end gap-3">
-                  <div className="flex-1 bg-slate-100 rounded-2xl px-4 py-3">
-                    <textarea
-                      value={newMessage}
-                      onChange={(e) => setNewMessage(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.shiftKey) {
-                          e.preventDefault()
-                          handleSendMessage()
-                        }
-                      }}
-                      placeholder="Digite uma mensagem..."
-                      rows={1}
-                      className="w-full bg-transparent text-slate-800 text-sm placeholder-slate-400 focus:outline-none resize-none"
-                    />
-                  </div>
-                  <button
-                    onClick={handleSendMessage}
-                    disabled={!newMessage.trim() || sendingMessage}
-                    className="w-10 h-10 bg-primary-600 rounded-xl flex items-center justify-center flex-shrink-0 hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  >
-                    {sendingMessage ? (
-                      <svg className="animate-spin w-4 h-4 text-white" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                      </svg>
-                    ) : (
-                      <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                      </svg>
-                    )}
-                  </button>
-                </div>
-                <p className="text-xs text-slate-400 mt-2 text-center">Enter para enviar • Shift+Enter para nova linha</p>
-              </div>
-            </>
-          ) : (
-            <div className="flex-1 flex items-center justify-center">
-              <div className="text-center">
-                <div className="w-20 h-20 bg-slate-100 rounded-3xl flex items-center justify-center mx-auto mb-6">
-                  <svg className="w-10 h-10 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 3H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z" />
-                  </svg>
-                </div>
-                <h3 className="text-slate-600 font-semibold text-lg">Selecione uma conversa</h3>
-                <p className="text-slate-400 text-sm mt-1">Use as abas para filtrar por etiqueta</p>
-              </div>
+        {/* Conversation list */}
+        <div className="flex-1 overflow-y-auto" style={{ background: '#111b21' }}>
+          {filtered.length === 0 ? (
+            <div className="flex items-center justify-center h-32 text-[#8696a0] text-sm">
+              Nenhuma conversa
             </div>
+          ) : (
+            filtered.map((conv) => (
+              <button
+                key={conv.id}
+                onClick={() => selectConv(conv)}
+                className="w-full flex items-start gap-3 px-3 py-3 border-b text-left transition-colors"
+                style={{
+                  borderColor: '#1f2c34',
+                  background: selected?.id === conv.id ? '#2a3942' : 'transparent',
+                }}
+              >
+                {/* Avatar */}
+                <div
+                  className="w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0"
+                  style={{ background: conv.avatarColor }}
+                >
+                  {conv.initials}
+                </div>
+
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-1 mb-0.5">
+                    <span className="text-sm font-medium text-[#e9edef] truncate">{conv.name}</span>
+                    <span className="text-[10px] text-[#8696a0] flex-shrink-0">{conv.time}</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="text-xs text-[#8696a0] truncate">{conv.preview}</span>
+                    {conv.unreadCount > 0 && (
+                      <span className="flex-shrink-0 min-w-[18px] h-[18px] bg-[#00a884] text-[#111b21] text-[10px] font-bold rounded-full flex items-center justify-center px-1">
+                        {conv.unreadCount}
+                      </span>
+                    )}
+                  </div>
+                  {/* Label pill */}
+                  <span className={`inline-block mt-1 text-[9px] font-bold px-1.5 py-0.5 rounded-full ${LABEL_STYLES[conv.label]}`}>
+                    {LABEL_TEXT[conv.label]}
+                  </span>
+                </div>
+              </button>
+            ))
           )}
         </div>
+      </div>
+
+      {/* ── Col 2: Chat area ───────────────────────────────────────────── */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {!selected ? (
+          /* Empty state */
+          <div
+            className="flex-1 flex flex-col items-center justify-center gap-4"
+            style={{ background: '#0b141a' }}
+          >
+            <div className="w-16 h-16 rounded-full bg-[#202c33] flex items-center justify-center">
+              <svg className="w-8 h-8 text-[#8696a0]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 3H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z" />
+              </svg>
+            </div>
+            <div className="text-center">
+              <p className="text-[#e9edef] font-medium">NeuroDesk Inbox</p>
+              <p className="text-[#8696a0] text-sm mt-1">Selecione uma conversa para começar</p>
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* Chat header */}
+            <div
+              className="flex items-center justify-between px-4 py-3 flex-shrink-0"
+              style={{ background: '#202c33' }}
+            >
+              <div className="flex items-center gap-3">
+                <div
+                  className="w-9 h-9 rounded-full flex items-center justify-center text-white text-sm font-bold"
+                  style={{ background: selected.avatarColor }}
+                >
+                  {selected.initials}
+                </div>
+                <div>
+                  <p className="text-[#e9edef] font-medium text-sm">{selected.name}</p>
+                  <p className="text-[#8696a0] text-xs">{LABEL_TEXT[selected.label]}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-1">
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${LABEL_STYLES[selected.label]}`}>
+                  {LABEL_TEXT[selected.label]}
+                </span>
+                <button className="p-2 rounded-full hover:bg-white/10 transition-colors ml-1">
+                  <svg className="w-5 h-5 text-[#8696a0]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            {/* Messages area */}
+            <div
+              className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-2"
+              style={{
+                background: '#0b141a',
+                backgroundImage: 'radial-gradient(circle at 1px 1px, #1f2c34 1px, transparent 0)',
+                backgroundSize: '20px 20px',
+              }}
+            >
+              {selected.messages.map((msg) => (
+                <MessageBubble key={msg.id} msg={msg} />
+              ))}
+              <div ref={messagesEndRef} />
+            </div>
+
+            {/* Footer input */}
+            <div
+              className="px-4 py-3 flex items-center gap-3 flex-shrink-0"
+              style={{ background: '#202c33' }}
+            >
+              <button className="p-2 rounded-full hover:bg-white/10 transition-colors flex-shrink-0">
+                <svg className="w-5 h-5 text-[#8696a0]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </button>
+              <button className="p-2 rounded-full hover:bg-white/10 transition-colors flex-shrink-0">
+                <svg className="w-5 h-5 text-[#8696a0]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                </svg>
+              </button>
+              <input
+                type="text"
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Digite uma mensagem"
+                className="flex-1 px-4 py-2 text-sm rounded-full outline-none text-[#e9edef] placeholder-[#8696a0]"
+                style={{ background: '#2a3942' }}
+              />
+              <button
+                onClick={sendMessage}
+                disabled={!message.trim()}
+                className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 transition-colors disabled:opacity-40"
+                style={{ background: '#00a884' }}
+              >
+                <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                </svg>
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ── Col 3: Contact info panel ──────────────────────────────────── */}
+      {selected && (
+        <div
+          className="w-[200px] flex-shrink-0 flex flex-col overflow-y-auto border-l"
+          style={{ background: '#0b141a', borderColor: '#2a3942' }}
+        >
+          {/* Header */}
+          <div className="px-4 py-3 flex-shrink-0" style={{ background: '#202c33' }}>
+            <div
+              className="w-12 h-12 rounded-full mx-auto flex items-center justify-center text-white font-bold mb-2"
+              style={{ background: selected.avatarColor }}
+            >
+              {selected.initials}
+            </div>
+            <p className="text-[#e9edef] font-semibold text-sm text-center">{selected.name}</p>
+            <p className="text-[#8696a0] text-xs text-center mt-0.5">
+              {selected.contactInfo.patientName ? `Resp. de ${selected.contactInfo.patientName}` : LABEL_TEXT[selected.label]}
+            </p>
+          </div>
+
+          {/* Labels */}
+          <div className="px-3 py-2 border-b" style={{ borderColor: '#1f2c34' }}>
+            <p className="text-[10px] font-medium uppercase tracking-wide text-[#00a884] mb-1.5">Etiqueta</p>
+            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${LABEL_STYLES[selected.label]}`}>
+              {LABEL_TEXT[selected.label]}
+            </span>
+          </div>
+
+          {/* Patient data */}
+          <div className="px-3 py-2 border-b" style={{ borderColor: '#1f2c34' }}>
+            <p className="text-[10px] font-medium uppercase tracking-wide text-[#00a884] mb-2">Dados</p>
+            {[
+              { key: 'Paciente',     val: selected.contactInfo.patientName },
+              { key: 'Diagnóstico',  val: selected.contactInfo.diagnosis },
+              { key: 'Profissional', val: selected.contactInfo.professional },
+              { key: 'Próx. sessão', val: selected.contactInfo.nextSession },
+            ].map(({ key, val }) => val ? (
+              <div key={key} className="mb-2">
+                <p className="text-[9px] text-[#8696a0] uppercase tracking-wide">{key}</p>
+                <p className="text-[11px] text-[#e9edef] leading-snug">{val}</p>
+              </div>
+            ) : null)}
+          </div>
+
+          {/* AI history */}
+          {selected.contactInfo.aiHistory && (
+            <div className="px-3 py-2 border-b" style={{ borderColor: '#1f2c34' }}>
+              <p className="text-[10px] font-medium uppercase tracking-wide text-[#00a884] mb-1.5">IA — histórico</p>
+              <p className="text-[11px] text-[#8696a0] leading-relaxed">{selected.contactInfo.aiHistory}</p>
+            </div>
+          )}
+
+          {/* Action buttons */}
+          <div className="px-3 py-3 flex flex-col gap-2 mt-auto">
+            <button
+              className="text-xs font-medium py-2 px-3 rounded-lg text-[#e9edef] transition-colors text-center"
+              style={{ background: '#005c4b' }}
+            >
+              Ver agendamentos
+            </button>
+            <button
+              className="text-xs font-medium py-2 px-3 rounded-lg text-[#8696a0] border transition-colors text-center"
+              style={{ borderColor: '#2a3942' }}
+            >
+              Abrir ficha completa
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function MessageBubble({ msg }: { msg: WaMessage }) {
+  if (msg.type === 'ai') {
+    return (
+      <div className="self-start max-w-[80%]">
+        <div
+          className="rounded-tr-lg rounded-b-lg p-2.5"
+          style={{ background: '#1e2f38', border: '1px solid #2a4a5a' }}
+        >
+          <div className="flex items-center gap-1 mb-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-[#00a884] inline-block" />
+            <span className="text-[9px] font-medium text-[#00a884]">NeuroDesk IA</span>
+          </div>
+          <p className="text-[11px] text-[#a8c6d0] leading-relaxed">{msg.text}</p>
+          <p className="text-[9px] text-[#8696a0] text-right mt-1">{msg.time}</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (msg.type === 'out') {
+    return (
+      <div className="self-end max-w-[75%]">
+        <div className="rounded-lg rounded-tr-none p-2.5" style={{ background: '#005c4b' }}>
+          <p className="text-[12px] text-[#e9edef] leading-relaxed">{msg.text}</p>
+          <p className="text-[9px] text-[#8696a0] text-right mt-1">{msg.time}</p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="self-start max-w-[75%]">
+      <div className="rounded-lg rounded-tl-none p-2.5" style={{ background: '#202c33' }}>
+        <p className="text-[12px] text-[#e9edef] leading-relaxed">{msg.text}</p>
+        <p className="text-[9px] text-[#8696a0] text-right mt-1">{msg.time}</p>
       </div>
     </div>
   )
